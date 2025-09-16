@@ -1,0 +1,39 @@
+[package]
+name = "obex_engine_i"
+version = "0.2.0"
+edition = "2021"
+description = "IOTA OBEX engine implementation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/iotaledger/obex"
+readme = "README.md"
+keywords = ["iota", "obex", "vrf", "cryptography"]
+categories = ["cryptography", "algorithms"]
+
+[features]
+# Pure Rust ECVRF is on by default
+default = ["vrf-r255"]
+vrf-r255 = ["dep:vrf-r255"]
+
+[dependencies]
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+rand_core = "0.6"
+thiserror = "2.0"
+
+# ECVRF (RFC 9381) via pure Rust
+vrf-r255 = { version = "0.1", optional = true }
+
+[[example]]
+name = "ecvrf_implementation"
+path = "examples/ecvrf_implementation.rs"
+
+[[example]]
+name = "ecvrf_verification"
+path = "examples/ecvrf_verification.rs"
+required-features = ["vrf-r255"]
+
+[[example]]
+name = "vrf_r255_api"
+path = "examples/vrf_r255_api.rs"
+required-features = ["vrf-r255"]
