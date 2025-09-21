@@ -10,12 +10,12 @@ The Obex Engine I library enables verifiable, deterministic randomness generatio
 
 ### Key Features
 
-- **RFC 9381 ECVRF**: Complete ECVRF-RISTRETTO255-SHA512 implementation with vrf-r255 backend
-- **Large Dataset Generation**: 2GB (67M+ leaves) deterministic dataset creation from VRF outputs
-- **Succinct Merkle Proofs**: Efficient verification using challenged leaf subsets
-- **Identity Binding**: Ed25519 signature-based participant authentication
-- **Ticket System**: Time-bounded authorization tokens with cryptographic validation
-- **Comprehensive Testing**: 28+ test cases covering all cryptographic operations
+- **RFC 9381 ECVRF**: Complete ECVRF-RISTRETTO255-SHA512 verification via `vrf-r255`
+- **Deterministic Leaves**: 2^26 leaves; BLAKE3 with per-epoch key K
+- **Succinct Merkle Proofs**: Verify challenged leaves against declared root
+- **Identity Binding**: Ed25519 signature over canonical message M
+- **Hardened API**: Fixed-size newtypes; strict encoders/decoders
+- **Quality Bar**: No unsafe; Clippy pedantic/nursery clean; unit + property tests; fuzz targets compile
 
 ## System Architecture
 
@@ -54,6 +54,8 @@ pub fn verify_registration_succinct<V: Vrf>(
     vrf: &V,
     registration: &Registration,
     openings: &[ChallengeOpen],
+    epoch: u32,
+    declared_root: &MerkleRoot,
 ) -> Result<(), Step1Error>;
 ```
 
@@ -72,15 +74,15 @@ The library uses the following Rust dependencies:
 
 ```toml
 [dependencies]
-blake3 = "1.5.4"           # Cryptographic hashing
-ed25519-dalek = "2.1.1"    # Ed25519 signatures
-rand = "0.8.5"             # Secure random number generation
-thiserror = "1.0.63"       # Error handling
-vrf-r255 = { version = "0.1.0", optional = true }  # ECVRF implementation
+blake3 = "1.5"                   # Cryptographic hashing
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+thiserror = "1.0"                # Error handling
+rand_core = { version = "0.6", features = ["getrandom"] }
+vrf-r255 = "0.1"                 # ECVRF implementation (RFC 9381)
 
 [features]
 default = ["vrf-r255"]
-vrf-r255 = ["dep:vrf-r255"]
+vrf-r255 = []
 ```
 
 ### Working Examples
@@ -199,7 +201,7 @@ let epoch_hash = compute_epoch_hash(&chain_id, epoch_number, &epoch_nonce, &y, &
 let signing_key = SigningKey::generate(&mut OsRng);
 let verifying_key = signing_key.verifying_key();
 // M = DOMAIN_TAG || "EPOCH" || E || epoch_nonce || pk
-let m = build_M(&epoch_hash, &epoch_nonce, &verifying_key);
+let m = build_m(&epoch_hash, &epoch_nonce, &verifying_key);
 let identity_sig = signing_key.sign(&m);
 
 // Step 3: Cryptographic material derivation
@@ -415,17 +417,16 @@ The implementation provides the following security guarantees:
 ### Core Types
 
 ```rust
-// Cryptographic type aliases
-pub type ChainId = [u8; 32];
-pub type EpochHash = [u8; 32];
-pub type EpochNonce = [u8; 32];
-pub type VrfOutput = [u8; 64];
-pub type VrfProof = [u8; 80];
-pub type VrfProofNew = [u8; 80];
-pub type Leaf = [u8; 32];
-pub type MerkleRoot = [u8; 32];
+// Fixed-size newtypes (misuse resistant)
+pub struct ChainId(pub [u8; 32]);
+pub struct EpochNonce(pub [u8; 32]);
+pub struct EpochHash(pub [u8; 32]);
+pub struct VrfOutput(pub [u8; 64]);
+pub struct VrfProof(pub [u8; 80]);
+pub struct MerkleRoot(pub [u8; 32]);
 
-// Protocol structures
+pub struct MerklePath { pub path: Vec<[u8; 32]> }
+
 pub struct Registration<'a> {
     pub chain_id: &'a ChainId,
     pub epoch_number: u64,
@@ -437,27 +438,6 @@ pub struct Registration<'a> {
     pub sig: &'a ed25519_dalek::Signature,
     pub root: &'a MerkleRoot,
 }
-
-pub struct ChallengeOpen<'a> {
-    pub index: u32,
-    pub leaf: &'a Leaf,
-    pub path: &'a MerklePath,
-}
-
-pub struct Ticket {
-    pub chain_id: ChainId,
-    pub epoch_number: u64,
-    pub epoch_hash: EpochHash,
-    pub epoch_nonce: EpochNonce,
-    pub pk: [u8; 32],
-    pub root: MerkleRoot,
-    pub valid_from: u64,
-    pub valid_to: u64,
-}
-
-pub struct MerklePath {
-    pub path: Vec<[u8; 32]>,
-}
 ```
 
 ### Core Functions
@@ -465,69 +445,41 @@ pub struct MerklePath {
 ```rust
 // VRF factory and operations
 pub fn mk_chain_vrf(pk_bytes: [u8; 32]) -> impl Vrf;
-pub fn mk_chain_vrf_from_secret(secret_bytes: [u8; 32]) -> impl Vrf;
-pub fn build_alpha(chain_id: &ChainId, epoch_number: u64, epoch_nonce: &EpochNonce) -> Vec<u8>;
+pub fn build_alpha(chain_id: &ChainId, epoch_number: u64, epoch_nonce: &EpochNonce) -> [u8; 86];
 
 // Epoch and identity operations
 pub fn compute_epoch_hash(
     chain_id: &ChainId,
     epoch_number: u64,
     epoch_nonce: &EpochNonce,
-    y: &[u8],
-    pi: &[u8],
+    y: &VrfOutput,
+    pi: &VrfProof,
 ) -> EpochHash;
-
-pub fn build_M(
-    epoch_hash: &EpochHash,
-    epoch_nonce: &EpochNonce,
-    pk: &ed25519_dalek::VerifyingKey,
-) -> Vec<u8>;
-
-pub fn verify_identity_sig(
-    pk: &ed25519_dalek::VerifyingKey,
-    message: &[u8],
-    signature: &ed25519_dalek::Signature,
-) -> Result<(), Step1Error>;
+pub fn build_m(epoch_hash: &EpochHash, epoch_nonce: &EpochNonce, pk: &ed25519_dalek::VerifyingKey) -> Vec<u8>;
+pub fn derive_seed_and_key(m: &[u8], signature: &ed25519_dalek::Signature) -> ([u8; 32], [u8; 32]);
+pub fn build_challenge_seed(epoch_hash: &EpochHash, epoch_nonce: &EpochNonce, pk: &ed25519_dalek::VerifyingKey, root: &MerkleRoot) -> [u8; 32];
 
 // Dataset and Merkle operations
-pub fn derive_seed_and_key(
-    m: &[u8],
-    signature: &ed25519_dalek::Signature,
-) -> ([u8; 32], [u8; 32]);
+pub fn compute_leaf(k: &[u8; 32], index: u32) -> [u8; 32];
+pub fn verify_merkle_path(index: u32, leaf: &[u8; 32], path: &MerklePath, root: &MerkleRoot) -> Result<(), Step1Error>;
 
-pub fn generate_full_dataset(k: &[u8; 32]) -> Result<(Vec<Leaf>, MerkleRoot), Step1Error>;
-pub fn generate_merkle_path(leaves: &[Leaf], index: u32) -> Result<MerklePath, Step1Error>;
-pub fn compute_leaf(k: &[u8; 32], index: u32) -> Leaf;
-
-// Challenge system
-pub fn build_challenge_seed(
-    epoch_hash: &EpochHash,
-    epoch_nonce: &EpochNonce,
-    pk: &ed25519_dalek::VerifyingKey,
-    root: &MerkleRoot,
-) -> [u8; 32];
-
-pub fn derive_indices(c_seed: &[u8; 32], k: usize) -> Vec<u32>;
+// Challenges
+pub fn derive_challenge_indices(reg: &Registration, epoch: u32) -> Result<Vec<u32>, Step1Error>;
 
 // Verification functions
 pub fn verify_registration_succinct<V: Vrf>(
     vrf: &V,
     registration: &Registration,
     openings: &[ChallengeOpen],
+    epoch: u32,
+    declared_root: &MerkleRoot,
 ) -> Result<(), Step1Error>;
 
-// Ticket system
-pub fn sign_ticket(
-    issuer_key: &ed25519_dalek::SigningKey,
-    ticket: &Ticket,
-) -> ed25519_dalek::Signature;
-
-pub fn verify_ticket(
-    issuer_pk: &ed25519_dalek::VerifyingKey,
-    ticket: &Ticket,
-    signature: &ed25519_dalek::Signature,
-    current_slot: u64,
-) -> Result<(), Step1Error>;
+// Ticket helpers
+pub fn create_ticket(params: TicketParams) -> Ticket;
+pub fn verify_ticket_time(ticket: &Ticket, current_time: Option<u64>) -> Result<(), Step1Error>;
+pub fn verify_tickets_batch(tickets: &[Ticket], current_time: Option<u64>) -> Vec<bool>;
+pub fn is_ticket_valid_time(ticket: &Ticket, current_time: Option<u64>) -> bool;
 ```
 
 ## Build Configuration
