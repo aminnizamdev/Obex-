@@ -6,7 +6,9 @@
 //! This implementation focuses purely on verification and does not include proving
 //! functionality, as per the Obex Engine I specification.
 
-use obex_engine_i::{LegacyVrfAdapter, NewVrf, Vrf, VrfProof, VrfProofNew, build_alpha, mk_chain_vrf};
+use obex_engine_i::{Vrf, VrfProof, mk_chain_vrf};
+use obex_engine_i::ser::build_alpha;
+use obex_engine_i::types::{ChainId, EpochNonce};
 
 fn main() {
     println!("=== Obex Engine I - VRF Verification Example ===");
@@ -31,7 +33,7 @@ fn main() {
     // VRF proof (80 bytes: gamma(32) || c(16) || s(32))
     // Note: This is a zero proof for testing
     // In practice, this would come from a VRF prover
-    let proof: VrfProofNew = [
+    let proof: VrfProof = VrfProof([
         // Gamma point (32 bytes)
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
@@ -45,9 +47,9 @@ fn main() {
         0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
         0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
         0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50,
-    ];
+    ]);
 
-    println!("VRF proof length: {} bytes (gamma(32) || c(16) || s(32))", proof.len());
+    println!("VRF proof length: {} bytes (gamma(32) || c(16) || s(32))", proof.0.len());
 
     // Attempt VRF verification
     match vrf.verify(alpha, &proof) {
@@ -62,19 +64,17 @@ fn main() {
         }
     }
 
-    println!("\n=== Legacy VRF Adapter Example ===");
+    println!("\n=== VRF Output Analysis ===");
     
-    // Demonstrate the legacy VRF adapter for backward compatibility
-    let legacy_vrf = LegacyVrfAdapter::new(vrf);
-    let legacy_proof: VrfProof = proof; // Same proof format
-    
-    match legacy_vrf.verify(alpha, &legacy_proof) {
+    // Demonstrate VRF output analysis
+    match vrf.verify(alpha, &proof) {
         Ok(output) => {
-            println!("Legacy VRF verification succeeded!");
-            println!("  Legacy VRF output length: {} bytes", output.len());
+            println!("VRF output analysis:");
+             println!("  Output length: {} bytes", output.0.len());
+             println!("  Output (first 16 bytes): {:02x?}", &output.0[..16]);
         }
         Err(e) => {
-            println!("Legacy VRF verification failed: {e:?}");
+            println!("VRF verification failed: {e:?}");
             println!("  This is expected with the zero proof data");
         }
     }
@@ -82,9 +82,9 @@ fn main() {
     println!("\n=== VRF Integration with OE1 ===");
     
     // Demonstrate integration with OE1 epoch computation
-    let chain_id = [0u8; 32];
+    let chain_id = ChainId([0u8; 32]);
     let epoch_number = 1u64;
-    let epoch_nonce = [1u8; 32];
+    let epoch_nonce = EpochNonce([1u8; 32]);
     
     // Build alpha for epoch computation
     let epoch_alpha = build_alpha(&chain_id, epoch_number, &epoch_nonce);
@@ -94,7 +94,10 @@ fn main() {
     // Create a new VRF instance for direct verification
     let vrf2 = mk_chain_vrf(pk_bytes);
     match vrf2.verify(&epoch_alpha, &proof) {
-        Ok(vrf_output) => println!("Epoch VRF verified: {vrf_output:?}"),
+        Ok(vrf_output) => {
+            println!("Epoch VRF verified successfully");
+            println!("  Epoch VRF output length: {} bytes", vrf_output.0.len());
+        },
         Err(_) => println!("Epoch VRF verification failed"),
     }
 

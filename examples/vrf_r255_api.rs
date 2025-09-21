@@ -3,8 +3,9 @@
 #[cfg(feature = "vrf-r255")]
 fn main() {
     use vrf_r255::{PublicKey, SecretKey};
+    use rand_core::OsRng;
     
-    let sk = SecretKey::generate(rand::thread_rng());
+    let sk = SecretKey::generate(OsRng);
     let pk = PublicKey::from(sk);
     let msg = b"input message";
     let proof = sk.prove(msg);

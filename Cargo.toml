@@ -1,39 +1,59 @@
 [package]
-name = "obex_engine_i"
-version = "0.2.0"
+name = "obex-engine-i"
+version = "0.1.0"
 edition = "2021"
-description = "IOTA OBEX engine implementation"
+authors = ["Obex Team"]
+description = "Production-grade cryptographic library for Obex Engine I Step-1 verification"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/iotaledger/obex"
-readme = "README.md"
-keywords = ["iota", "obex", "vrf", "cryptography"]
+repository = "https://github.com/obex/obex-engine-i"
+keywords = ["cryptography", "vrf", "merkle", "proof-of-storage"]
 categories = ["cryptography", "algorithms"]
-
-[features]
-# Pure Rust ECVRF is on by default
-default = ["vrf-r255"]
-vrf-r255 = ["dep:vrf-r255"]
 
 [dependencies]
 blake3 = "1.5"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
-rand = "0.8"
-rand_core = "0.6"
-thiserror = "2.0"
+thiserror = "1.0"
+rand_core = { version = "0.6", features = ["getrandom"] }
+vrf-r255 = "0.1"
 
-# ECVRF (RFC 9381) via pure Rust
-vrf-r255 = { version = "0.1", optional = true }
+[dev-dependencies]
+proptest = "1.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+libfuzzer-sys = "0.4"
 
-[[example]]
-name = "ecvrf_implementation"
-path = "examples/ecvrf_implementation.rs"
+[features]
+default = ["vrf-r255"]
+std = []
+vrf-r255 = []
 
-[[example]]
-name = "ecvrf_verification"
-path = "examples/ecvrf_verification.rs"
-required-features = ["vrf-r255"]
+[[bench]]
+name = "crypto_benchmarks"
+harness = false
 
-[[example]]
-name = "vrf_r255_api"
-path = "examples/vrf_r255_api.rs"
-required-features = ["vrf-r255"]
+# Fuzz targets are handled by cargo-fuzz, not as regular binaries
+# [[bin]]
+# name = "fuzz_registration_decode"
+# path = "fuzz/fuzz_targets/registration_decode.rs"
+# test = false
+# bench = false
+#
+# [[bin]]
+# name = "fuzz_registration_verify"
+# path = "fuzz/fuzz_targets/registration_verify.rs"
+# test = false
+# bench = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
