@@ -1,0 +1,32 @@
+[package]
+name = "obex-engine-i-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ed25519-dalek = "2.0"
+
+[dependencies.obex-engine-i]
+path = ".."
+
+[[bin]]
+name = "registration_decode"
+path = "fuzz_targets/registration_decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "registration_verify"
+path = "fuzz_targets/registration_verify.rs"
+test = false
+doc = false
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
