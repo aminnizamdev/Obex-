@@ -1,0 +1,30 @@
+[package]
+name = "obex_alpha_i"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Obex α I — Participation Engine (VRF-salted, RAM-hard)"
+repository = "https://github.com/obex-labs/obex-alpha"
+readme = "../../README.md"
+keywords = ["obex","consensus","cryptography","vrf","merkle"]
+categories = ["cryptography","algorithms","data-structures"]
+
+[features]
+default = ["ecvrf_rfc9381"]
+# New canonical feature name (kept alongside legacy for compatibility)
+ecvrf_rfc9381 = ["vrf-rfc9381/edwards25519", "sha2"]
+# Legacy alias (CI/scripts may still reference this)
+ecvrf_rfc9381-ed25519 = ["ecvrf_rfc9381"]
+
+[dependencies]
+obex_primitives = { path = "../obex_primitives" }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+thiserror = "2.0"
+vrf-rfc9381 = { version = "0.0.3", optional = true, default-features = false, features = ["edwards25519"] }
+sha2 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+hex = "0.4"
+hex-literal = "0.4"
+
+

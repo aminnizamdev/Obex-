@@ -1,0 +1,708 @@
+obex.alpha T
+
+obex.α T — Tokenomics (Deterministic Emission, Fees, and Validator Rewards)
+
+Production blueprint (byte-precise; Rust-ready pseudocode).
+Role: Provide ledger-only, integer-exact, race-free issuance, fee routing, and validator rewards that are consensus-deterministic and bit-compatible across independent implementations.
+
+Consumes (consensus inputs per slot s):
+	•	y_edge_s — per-slot beacon edge (from obex.α II’s beacon verifier).
+	•	P_s and part_root_s — participation set and commitment for slot s (from obex.α I; committed by obex.α II).
+	•	ticket_root_s — admission commitment (from obex.α III; committed by obex.α II).
+	•	txroot_{s-1} — previous slot execution commitment (from obex.α II).
+
+Produces (during settlement of slot s):
+	•	Exact ledger debits/credits for user transfers.
+	•	Fee escrow credits and deterministic releases to Verifier Pool / Treasury / Burn.
+	•	Emission credit for DRP (Deterministic Reward Pool).
+	•	DRP payouts to participants in P_s (baseline + lottery).
+	•	Canonical system transactions serialized into txroot_s (committed by Header_{s+1} in obex.α II).
+
+All tags, encodings, ordering rules, and equalities below are normative. Independent nodes must agree bit-for-bit.
+
+⸻
+
+0) Determinism & Guarantees (normative)
+	•	Ledger-only determinism. No wall clocks, no floats, no off-chain randomness. All effects are explicit ledger writes recorded as system transactions.
+	•	Exact capped emission. Geometric halving over 100 protocol years ends exactly at LAST_EMISSION_SLOT, paying a total of TOTAL_SUPPLY_μOBX micro-OBX.
+	•	Fee integrity (no drift). The integer fee debited from a sender is first credited to Fee Escrow. Fractional accounting releases only whole μOBX, bounded by escrow. Unreleasable remainders stay in escrow for future release.
+	•	Race-free rewards. A per-slot Deterministic Reward Pool (DRP) pays a baseline to all keys in P_s and a lottery to K distinct winners selected from P_s using y_edge_s. No proposer advantage, no timing races.
+	•	Cross-module coherence. Uses the same hashing, Merkle, and serialization discipline as obex.α I/II/III.
+
+⸻
+
+1) Units, Types, Hashing, and Merkle (normative)
+
+1.1 Units & supply
+
+pub const μOBX_PER_OBX: u128 = 100_000_000;               // 1 OBX = 1e8 μOBX
+pub const TOTAL_SUPPLY_OBX:    u128 = 1_000_000;          // 1.0 M OBX
+pub const TOTAL_SUPPLY_μOBX:   u128 = TOTAL_SUPPLY_OBX * μOBX_PER_OBX; // 1e14 μOBX
+
+1.2 Slot cadence (consensus constants; no wall clock in validation)
+
+pub const SLOT_MS: u64 = 100;                              // 10 slots/sec
+pub const SLOTS_PER_SEC: u64 = 1_000 / SLOT_MS;            // 10
+pub const PROTOCOL_YEAR_SEC: u64 = 365 * 86_400;           // 31_536_000
+pub const SLOTS_PER_YEAR: u64 = PROTOCOL_YEAR_SEC * SLOTS_PER_SEC; // 315_360_000
+
+Operational note (non-consensus): choose GENESIS_UNIX_TIME so that
+GENESIS_UNIX_TIME + LAST_EMISSION_SLOT * SLOT_MS meets your target civil instant. Consensus never reads a clock.
+
+1.3 Hashing, encodings, and Merkle (global discipline)
+	•	Integers: little-endian fixed width. LE(x, W) emits exactly W bytes (no overlong encodings).
+	•	Hash: Hash256 = [u8; 32].
+	•	Domain-tagged SHA3-256 with length framing:
+
+H(tag_ascii, parts[]) =
+    SHA3_256( UTF8(tag_ascii) || Σ ( LE(|p|,8) || p ) )
+
+
+	•	Binary Merkle (duplicate last when odd):
+	•	Leaf: H("obex.merkle.leaf", payload)
+	•	Node: H("obex.merkle.node", L || R)
+	•	Empty: H("obex.merkle.empty", [])
+
+Normative tags used by obex.α T:
+
+"obex.sys.tx"     "obex.reward.draw"   "obex.reward.rank"
+"obex.merkle.leaf"  "obex.merkle.node"  "obex.merkle.empty"
+
+(Plus all shared tags from α I/II/III for txid leaves when forming txroot_s.)
+
+⸻
+
+2) Emission — 100-year halving series (integer-exact)
+
+2.1 Schedule
+
+pub const YEARS_PER_HALVING: u64 = 5;
+pub const SLOTS_PER_HALVING: u128 = (SLOTS_PER_YEAR as u128) * (YEARS_PER_HALVING as u128); // 1_576_800_000
+pub const HALVING_COUNT: u32 = 20;                                      // 100 years
+pub const LAST_EMISSION_SLOT: u128 = (SLOTS_PER_YEAR as u128) * 100;    // 31_536_000_000
+
+2.2 Rational calibration (exact; drift-free)
+
+Let N = HALVING_COUNT, B = SLOTS_PER_HALVING. Initial rational per-slot emission:
+
+R0 = TOTAL_SUPPLY_μOBX * 2^(N-1) / ( B * (2^N − 1) )
+
+Per period p ∈ [0..N-1], denominator doubles each halving. We accumulate with a U256 numerator to emit only whole μOBX, proving Σ payouts == TOTAL_SUPPLY_μOBX at LAST_EMISSION_SLOT.
+
+⸻
+
+3) Fee rule (shared with obex.α III; integer-only)
+
+pub const MIN_TRANSFER_μ: u128 = 10;
+pub const FLAT_SWITCH_μ:  u128 = 1_000;
+pub const FLAT_FEE_μ:     u128 = 10;
+
+#[inline]
+pub fn fee_int(amount_μ: u128) -> u128 {
+    assert!(amount_μ >= MIN_TRANSFER_μ);
+    if amount_μ <= FLAT_SWITCH_μ { FLAT_FEE_μ } else { (amount_μ + 99) / 100 } // ceil(1%)
+}
+
+obex.α III enforces the equality tx.fee_μ == fee_int(tx.amount_μ) at admission; obex.α T routes the exact same integer fee on-ledger.
+
+⸻
+
+4) NLB splits with Fee Escrow (no drift; epoch-stable)
+
+4.1 System accounts (ledger identities)
+	•	SYS_VERIFIER_POOL — holds DRP corpus; receives emission & verifier fee releases; pays rewards.
+	•	SYS_TREASURY — receives treasury share.
+	•	SYS_BURN — irrecoverable sink.
+	•	SYS_FEE_ESCROW — holds all integer fees prior to release.
+
+All credits/debits occur via system transactions (see §7).
+
+4.2 Epoch-stable split policy
+
+To avoid oscillation gaming, split percentages change only at deterministic epoch boundaries.
+
+pub const NLB_EPOCH_SLOTS: u64 = 10_000;  // ~16m40s at 10 slots/sec
+
+#[derive(Clone)]
+pub struct NlbEpochState {
+    pub epoch_index: u64,          // floor(slot / NLB_EPOCH_SLOTS)
+    pub start_slot:  u64,
+    pub eff_supply_snapshot: u128, // TOTAL_SUPPLY_μOBX − total_burned_μ
+    pub v_pct: u8,                 // % to Verifier Pool
+    pub t_pct: u8,                 // % to Treasury
+    pub b_pct: u8,                 // % to Burn
+}
+
+Burn % table (example with floor), redirecting any burn reduction to verifiers:
+
+const TH_500K_OBX: u128 = 500_000 * μOBX_PER_OBX;
+const TH_400K_OBX: u128 = 400_000 * μOBX_PER_OBX;
+const TH_300K_OBX: u128 = 300_000 * μOBX_PER_OBX;
+const TH_200K_OBX: u128 = 200_000 * μOBX_PER_OBX;
+
+const BASE_TREASURY_PCT: u8 = 40;
+const INITIAL_BURN_PCT:  u8 = 20;
+const BASE_VERIFIER_PCT: u8 = 40;
+const BURN_FLOOR_PCT:    u8 = 1;
+
+fn burn_percent(eff_μ: u128) -> u8 {
+    if eff_μ >= TH_500K_OBX { 20 }
+    else if eff_μ >= TH_400K_OBX { 15 }
+    else if eff_μ >= TH_300K_OBX { 10 }
+    else if eff_μ >= TH_200K_OBX {  5 }
+    else { BURN_FLOOR_PCT }
+}
+
+fn compute_splits(eff_μ: u128) -> (u8,u8,u8) {
+    let b = burn_percent(eff_μ);
+    let redirect = INITIAL_BURN_PCT.saturating_sub(b); // 0..19 → bump verifiers
+    let v = BASE_VERIFIER_PCT.saturating_add(redirect);
+    let t = BASE_TREASURY_PCT;
+    debug_assert!((v as u16 + t as u16 + b as u16) == 100);
+    (v,t,b)
+}
+
+4.3 Fee Escrow routing (bounded by escrow; integer releases only)
+
+Principle: The integer fee_int debited from a sender is credited to escrow first. Fractional accumulators (scaled by 10 000) track split entitlements. On each call, we release only whole μOBX, capped by escrow, in a deterministic priority when underfunded (reduce Burn → Treasury → Verifier).
+
+⸻
+
+5) DRP — Deterministic Reward Pool (baseline + lottery; no races)
+
+5.1 Inputs per slot s
+	•	P_s — participation set (sorted vector of 32-byte PK) and its committed part_root_s (from obex.α I / obex.α II).
+	•	y_edge_s — beacon edge (from obex.α II).
+	•	Pool corpus for slot s: DRP_s = emission_s + verifier_fee_release_s (ledger balance observed at SYS_VERIFIER_POOL after fee releases & emission credit in settlement of s).
+
+5.2 Distribution parameters
+
+pub const DRP_BASELINE_PCT: u8 = 20;   // baseline share to all in P_s
+pub const DRP_K_WINNERS:    usize = 16;// number of lottery winners per slot
+
+Policy:
+	•	baseline = floor(DRP_s * DRP_BASELINE_PCT / 100); per_base = floor(baseline / |P_s|); residual baseline % |P_s| burns.
+	•	lottery = DRP_s − baseline; choose K = min(DRP_K_WINNERS, |P_s|) unique winners uniformly over indices 0..|P_s|-1 using y_edge_s; each winner receives per_win = floor(lottery / K); residual lottery % K burns.
+	•	If per_base == 0 and per_win == 0, carry corpus forward (no payouts this slot).
+
+Winner sampling (rejection sampling; uniform; collision-free):
+
+draw_t = H("obex.reward.draw", [ y_edge_s, LE(s,8), LE(t,4) ])
+idx_t  = U64LE(draw_t[0..8]) % m
+re-draw on duplicates until K unique indices
+
+Winner payout order: sort winners by rank = H("obex.reward.rank",[y_edge_s, pk]) ascending to get a canonical, tie-break-free ordering of reward system txs.
+
+⸻
+
+6) System transactions (serialization; included in txroot_s)
+
+Every ledger write caused by tokenomics during settlement of slot s is materialized as a system transaction:
+
+SysTx {
+  kind : u8     // 0=ESCROW_CREDIT, 1=VERIFIER_CREDIT, 2=TREASURY_CREDIT, 3=BURN, 4=REWARD_PAYOUT, 5=EMISSION_CREDIT
+  slot : u64    // LE(8) = slot s that produces this write
+  pk   : [u8;32] // present only for REWARD_PAYOUT (else 32 zero bytes)
+  amt  : u128   // LE(16) μOBX amount (integer)
+}
+
+Canonical bytes:
+
+enc_sys_tx(tx) =
+  H("obex.sys.tx",[])
+  || LE(kind,1)
+  || LE(slot,8)
+  || pk[32]
+  || LE(amt,16)
+
+Deterministic order within slot s (exact):
+	1.	ESCROW_CREDIT (sum of fee_int for all executed user txs).
+	2.	Emission: EMISSION_CREDIT.
+	3.	Escrow releases in split order: VERIFIER_CREDIT, TREASURY_CREDIT, BURN.
+	4.	REWARD_PAYOUT items ordered by lottery rank ascending where rank = H("obex.reward.rank", [y_edge_s, pk]).
+
+All system txs (plus executed user txs) are hashed as leaves via the α II tx-leaf scheme to form txroot_s, which is committed by Header_{s+1} in obex.α II.
+
+⸻
+
+7) Rust-ready pseudocode (consensus-critical)
+
+Replace the cryptographic stubs (sha3_256) with vetted implementations. All encodings, tags, and field orders are normative.
+
+// =============================== obex_alpha_t.rs ===============================
+// obex.α T — Tokenomics (deterministic emission, fees, rewards)
+// Byte-precise; ledger-only; coherent with obex.α I/II/III.
+// ==============================================================================
+
+#![allow(unused)]
+use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
+
+// ——— Types ——————————————————————————————————————————————————————————
+pub type Hash256 = [u8; 32];
+
+// ——— Integer encodings ————————————————————————————————————————————
+#[inline]
+pub fn le_bytes<const W: usize>(mut x: u128) -> [u8; W] {
+    let mut out = [0u8; W];
+    for i in 0..W { out[i] = (x & 0xFF) as u8; x >>= 8; }
+    out
+}
+
+#[inline]
+pub fn u64_from_le(b: &[u8]) -> u64 {
+    let mut x = 0u64;
+    for (i,&bi) in b.iter().take(8).enumerate() { x |= (bi as u64) << (8*i); }
+    x
+}
+
+// ——— Hashing (domain-tagged, length-framed) ————————————————————
+pub fn sha3_256(_input: &[u8]) -> Hash256 { unimplemented!() }
+
+#[inline]
+pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(tag.as_bytes());
+    for p in parts {
+        buf.extend_from_slice(&le_bytes::<8>(p.len() as u128));
+        buf.extend_from_slice(p);
+    }
+    sha3_256(&buf)
+}
+
+// ——— Merkle helpers (for completeness) ————————————————————————
+#[inline] pub fn merkle_leaf(payload: &[u8]) -> Hash256 { h_tag("obex.merkle.leaf", &[payload]) }
+
+#[inline]
+pub fn merkle_node(l: &Hash256, r: &Hash256) -> Hash256 {
+    let mut cat = [0u8; 64];
+    cat[..32].copy_from_slice(l);
+    cat[32..].copy_from_slice(r);
+    h_tag("obex.merkle.node", &[&cat])
+}
+
+pub fn merkle_root(leaves_payload: &[Vec<u8>]) -> Hash256 {
+    if leaves_payload.is_empty() { return h_tag("obex.merkle.empty", &[]); }
+    let mut lvl: Vec<Hash256> = leaves_payload.iter().map(|p| merkle_leaf(p)).collect();
+    while lvl.len() > 1 {
+        if lvl.len() % 2 == 1 { lvl.push(*lvl.last().unwrap()); }
+        let mut nxt = Vec::with_capacity(lvl.len()/2);
+        for i in (0..lvl.len()).step_by(2) { nxt.push(merkle_node(&lvl[i], &lvl[i+1])); }
+        lvl = nxt;
+    }
+    lvl[0]
+}
+
+// ——— Supply & timing constants ————————————————————————————————
+pub const μOBX_PER_OBX: u128 = 100_000_000;
+pub const TOTAL_SUPPLY_OBX:  u128 = 1_000_000;
+pub const TOTAL_SUPPLY_μOBX: u128 = TOTAL_SUPPLY_OBX * μOBX_PER_OBX;
+
+pub const SLOT_MS: u64 = 100;
+pub const SLOTS_PER_SEC: u64 = 1_000 / SLOT_MS;
+pub const PROTOCOL_YEAR_SEC: u64 = 365 * 86_400;
+pub const SLOTS_PER_YEAR: u64 = PROTOCOL_YEAR_SEC * SLOTS_PER_SEC;
+
+// Halving
+pub const YEARS_PER_HALVING: u64 = 5;
+pub const SLOTS_PER_HALVING: u128 = (SLOTS_PER_YEAR as u128) * (YEARS_PER_HALVING as u128);
+pub const HALVING_COUNT: u32 = 20;
+pub const LAST_EMISSION_SLOT: u128 = (SLOTS_PER_YEAR as u128) * 100;
+
+// ——— Emission accumulator (exact rational; U256) ———————————————
+use primitive_types::U256;
+#[inline] fn pow2_u256(n: u32) -> U256 { U256::from(1u8) << n }
+
+lazy_static::lazy_static! {
+    static ref TWO_POW_N_MINUS1: U256 = pow2_u256(HALVING_COUNT - 1);
+    static ref TWO_POW_N:        U256 = pow2_u256(HALVING_COUNT);
+    static ref R0_NUM: U256 = U256::from(TOTAL_SUPPLY_μOBX) * *TWO_POW_N_MINUS1;
+    static ref R0_DEN: U256 = U256::from(SLOTS_PER_HALVING) * (*TWO_POW_N - U256::from(1u8));
+}
+
+#[derive(Clone, Default)]
+pub struct EmissionState {
+    pub total_emitted_μ: u128, // <= TOTAL_SUPPLY_μOBX
+    pub acc_num: U256,         // rational numerator accumulator
+}
+
+#[inline]
+fn period_index(slot_1based: u128) -> u32 {
+    let h = slot_1based - 1;
+    (h / SLOTS_PER_HALVING) as u32
+}
+
+#[inline]
+fn reward_den_for_period(p: u32) -> U256 { *R0_DEN * pow2_u256(p) }
+
+/// Deterministic emission for slot s=1..LAST_EMISSION_SLOT.
+/// Credits the DRP via `credit_emission` (e.g., credit SYS_VERIFIER_POOL).
+pub fn on_slot_emission(
+    st: &mut EmissionState,
+    slot_1based: u128,
+    mut credit_emission: impl FnMut(u128), // produces EMISSION_CREDIT sys tx
+) {
+    if slot_1based == 0 || slot_1based > LAST_EMISSION_SLOT { return; }
+
+    let p = period_index(slot_1based);
+    let den = reward_den_for_period(p);
+
+    st.acc_num = st.acc_num + *R0_NUM;
+
+    let payout_u256 = st.acc_num / den;
+    if payout_u256 > U256::zero() {
+        assert!(payout_u256 <= U256::from(u128::MAX));
+        let payout = payout_u256.as_u128();
+
+        let remaining = TOTAL_SUPPLY_μOBX - st.total_emitted_μ;
+        let pay = payout.min(remaining);
+        if pay > 0 {
+            credit_emission(pay);
+            st.total_emitted_μ = st.total_emitted_μ.saturating_add(pay);
+            st.acc_num = st.acc_num - (U256::from(pay) * den);
+        }
+    }
+
+    if slot_1based == LAST_EMISSION_SLOT {
+        assert!(st.total_emitted_μ == TOTAL_SUPPLY_μOBX);
+    }
+}
+
+// ——— Fee rule (shared with α III) ——————————————————————————————
+pub const MIN_TRANSFER_μ: u128 = 10;
+pub const FLAT_SWITCH_μ:  u128 = 1_000;
+pub const FLAT_FEE_μ:     u128 = 10;
+
+#[inline]
+pub fn fee_int(amount_μ: u128) -> u128 {
+    assert!(amount_μ >= MIN_TRANSFER_μ);
+    if amount_μ <= FLAT_SWITCH_μ { FLAT_FEE_μ } else { (amount_μ + 99) / 100 }
+}
+
+// ——— NLB epoch & fee escrow state —————————————————————————————
+pub const NLB_EPOCH_SLOTS: u64 = 10_000;
+
+#[derive(Clone)]
+pub struct NlbEpochState {
+    pub epoch_index: u64,
+    pub start_slot:  u64,
+    pub eff_supply_snapshot_μ: u128,
+    pub v_pct: u8,
+    pub t_pct: u8,
+    pub b_pct: u8,
+}
+
+#[derive(Clone, Default)]
+pub struct FeeSplitState {
+    // fractional numerators (denominator 10_000), scaled from fee basis (100 or 1)
+    pub acc_v_num: u128,
+    pub acc_t_num: u128,
+    pub acc_b_num: u128,
+
+    // escrow & burned totals
+    pub fee_escrow_μ: u128,
+    pub total_burned_μ: u128,
+
+    pub nlb: NlbEpochState,
+}
+
+const TH_500K_OBX: u128 = 500_000 * μOBX_PER_OBX;
+const TH_400K_OBX: u128 = 400_000 * μOBX_PER_OBX;
+const TH_300K_OBX: u128 = 300_000 * μOBX_PER_OBX;
+const TH_200K_OBX: u128 = 200_000 * μOBX_PER_OBX;
+
+const BASE_TREASURY_PCT: u8 = 40;
+const INITIAL_BURN_PCT:  u8 = 20;
+const BASE_VERIFIER_PCT: u8 = 40;
+const BURN_FLOOR_PCT:    u8 = 1;
+
+#[inline]
+fn burn_percent(eff_μ: u128) -> u8 {
+    if eff_μ >= TH_500K_OBX { 20 }
+    else if eff_μ >= TH_400K_OBX { 15 }
+    else if eff_μ >= TH_300K_OBX { 10 }
+    else if eff_μ >= TH_200K_OBX {  5 }
+    else { BURN_FLOOR_PCT }
+}
+
+#[inline]
+fn compute_splits(eff_μ: u128) -> (u8,u8,u8) {
+    let b = burn_percent(eff_μ);
+    let redirect = INITIAL_BURN_PCT.saturating_sub(b);
+    let v = BASE_VERIFIER_PCT.saturating_add(redirect);
+    let t = BASE_TREASURY_PCT;
+    debug_assert!((v as u16 + t as u16 + b as u16) == 100);
+    (v,t,b)
+}
+
+#[inline]
+fn epoch_index(slot: u64) -> u64 { slot / NLB_EPOCH_SLOTS }
+
+pub fn nlb_roll_epoch_if_needed(slot: u64, fs: &mut FeeSplitState) {
+    let idx = epoch_index(slot);
+    if idx == fs.nlb.epoch_index { return; }
+    fs.nlb.epoch_index = idx;
+    fs.nlb.start_slot  = idx * NLB_EPOCH_SLOTS;
+    let eff_μ = TOTAL_SUPPLY_μOBX.saturating_sub(fs.total_burned_μ);
+    fs.nlb.eff_supply_snapshot_μ = eff_μ;
+    let (v,t,b) = compute_splits(eff_μ);
+    fs.nlb.v_pct = v; fs.nlb.t_pct = t; fs.nlb.b_pct = b;
+}
+
+// ——— Fee routing via escrow (bounded releases; deterministic) —————
+pub fn route_fee_with_nlb(
+    fs: &mut FeeSplitState,
+    fee_num: u128, fee_den: u128,         // fee as rational: (10/1) or (amount/100)
+    mut credit_verifier: impl FnMut(u128),// debits escrow → credit Verifier Pool (sys tx)
+    mut credit_treasury: impl FnMut(u128),// debits escrow → credit Treasury     (sys tx)
+    mut burn:            impl FnMut(u128),// debits escrow → burn                (sys tx)
+) {
+    // Lift to denominator 100
+    let fee_num_over_100 = if fee_den == 1 { fee_num.saturating_mul(100) } else { fee_num };
+
+    // Scale to denominator 10_000 with epoch %s
+    let add_v = fee_num_over_100.saturating_mul(fs.nlb.v_pct as u128);
+    let add_t = fee_num_over_100.saturating_mul(fs.nlb.t_pct as u128);
+    let add_b = fee_num_over_100.saturating_mul(fs.nlb.b_pct as u128);
+    fs.acc_v_num = fs.acc_v_num.saturating_add(add_v);
+    fs.acc_t_num = fs.acc_t_num.saturating_add(add_t);
+    fs.acc_b_num = fs.acc_b_num.saturating_add(add_b);
+
+    const DEN_10K: u128 = 10_000;
+    let mut rel_v = fs.acc_v_num / DEN_10K;
+    let mut rel_t = fs.acc_t_num / DEN_10K;
+    let mut rel_b = fs.acc_b_num / DEN_10K;
+
+    // Cap by escrow
+    let total_rel = rel_v.saturating_add(rel_t).saturating_add(rel_b);
+    if total_rel > fs.fee_escrow_μ {
+        // Deterministic deficit resolution: reduce Burn → Treasury → Verifier
+        let mut deficit = total_rel - fs.fee_escrow_μ;
+        let mut reduce = |x: &mut u128, d: &mut u128| { let cut = (*x).min(*d); *x -= cut; *d -= cut; };
+        reduce(&mut rel_b, &mut deficit);
+        reduce(&mut rel_t, &mut deficit);
+        reduce(&mut rel_v, &mut deficit);
+    }
+
+    if rel_v > 0 { credit_verifier(rel_v); fs.fee_escrow_μ -= rel_v; fs.acc_v_num %= DEN_10K; }
+    if rel_t > 0 { credit_treasury(rel_t); fs.fee_escrow_μ -= rel_t; fs.acc_t_num %= DEN_10K; }
+    if rel_b > 0 { burn(rel_b);            fs.fee_escrow_μ -= rel_b; fs.acc_b_num %= DEN_10K; fs.total_burned_μ = fs.total_burned_μ.saturating_add(rel_b); }
+}
+
+// ——— Transfer processing (executor path; integer-only) ——————————
+pub fn process_transfer(
+    slot: u64,
+    sender_balance_μ: u128,
+    amount_μ: u128,
+    fs: &mut FeeSplitState,
+
+    // ledger hooks (each emits a system transaction)
+    mut debit_sender:    impl FnMut(u128), // total_debit
+    mut credit_recipient:impl FnMut(u128), // amount_μ
+    mut escrow_credit:   impl FnMut(u128), // ESCROW_CREDIT
+    mut credit_verifier: impl FnMut(u128), // VERIFIER_CREDIT
+    mut credit_treasury: impl FnMut(u128), // TREASURY_CREDIT
+    mut burn:            impl FnMut(u128), // BURN
+) -> (u128 /*total_debit*/, u128 /*fee_int*/) {
+    assert!(amount_μ >= MIN_TRANSFER_μ);
+
+    // Lock epoch parameters for this slot
+    nlb_roll_epoch_if_needed(slot, fs);
+
+    // Fee as rational (num/den)
+    let (fee_num, fee_den) = if amount_μ <= FLAT_SWITCH_μ { (FLAT_FEE_μ, 1) } else { (amount_μ, 100) };
+    let fee_μ = (fee_num + (fee_den - 1)) / fee_den; // integer ceil
+
+    let total_debit = amount_μ.saturating_add(fee_μ);
+    assert!(sender_balance_μ >= total_debit);
+
+    // Ledger effects: debit sender; credit recipient
+    debit_sender(total_debit);
+    credit_recipient(amount_μ);
+
+    // Fee escrow credit
+    fs.fee_escrow_μ = fs.fee_escrow_μ.saturating_add(fee_μ);
+    escrow_credit(fee_μ);
+
+    // Attempt releases (bounded by escrow)
+    route_fee_with_nlb(fs, fee_num, fee_den, credit_verifier, credit_treasury, burn);
+
+    (total_debit, fee_μ)
+}
+
+// ——— DRP: winner sampling & distribution ———————————————————————
+#[inline]
+fn ctr_draw(y: &Hash256, s: u64, t: u32) -> Hash256 {
+    h_tag("obex.reward.draw", &[y, &le_bytes::<8>(s as u128), &le_bytes::<4>(t as u128)])
+}
+
+pub fn pick_k_unique_indices(y_edge_s: &Hash256, s: u64, m: usize, k: usize) -> Vec<usize> {
+    if m == 0 || k == 0 { return vec![]; }
+    let mut out = Vec::with_capacity(k);
+    let mut seen = BTreeSet::new();
+    let mut t: u32 = 0;
+    while out.len() < k {
+        let h = ctr_draw(y_edge_s, s, t);
+        let idx = (u64_from_le(&h[..8]) % (m as u64)) as usize;
+        if seen.insert(idx) { out.push(idx); }
+        t = t.wrapping_add(1);
+    }
+    out
+}
+
+#[inline] fn reward_rank(y: &Hash256, pk: &Hash256) -> Hash256 {
+    h_tag("obex.reward.rank", &[y, pk])
+}
+
+pub const DRP_BASELINE_PCT: u8 = 20;
+pub const DRP_K_WINNERS:    usize = 16;
+
+pub fn distribute_drp_for_slot(
+    s: u64,
+    y_edge_s: &Hash256,
+    part_set_sorted: &[Hash256],       // P_s; pk as 32-byte arrays; sorted ascending
+    mut read_pool_balance: impl FnMut() -> u128,
+    mut debit_pool:        impl FnMut(u128),            // total payout
+    mut credit_pk:         impl FnMut(&Hash256, u128),  // REWARD_PAYOUT sys tx
+    mut burn_fn:           impl FnMut(u128),            // BURN sys tx
+) {
+    let m = part_set_sorted.len();
+    let drp = read_pool_balance();
+    if drp == 0 || m == 0 { return; }
+
+    let baseline = (drp as u128 * (DRP_BASELINE_PCT as u128)) / 100;
+    let lottery  = drp - baseline;
+
+    let per_base = baseline / (m as u128);
+    let base_rem = baseline % (m as u128);
+
+    let k = core::cmp::min(DRP_K_WINNERS, m);
+    if k == 0 { return; }
+
+    let winners_idx = pick_k_unique_indices(y_edge_s, s, m, k);
+    let per_win = lottery / (k as u128);
+    let lot_rem = lottery % (k as u128);
+
+    if per_base == 0 && per_win == 0 {
+        // carry forward corpus; no payouts this slot
+        return;
+    }
+
+    let total_pay = per_base * (m as u128) + per_win * (k as u128);
+    debit_pool(total_pay);
+
+    // Baseline: pay all participants in sorted order
+    if per_base > 0 {
+        for pk in part_set_sorted {
+            credit_pk(pk, per_base);
+        }
+    }
+    if base_rem > 0 { burn_fn(base_rem); }
+
+    // Lottery: determinize payout sequence by rank
+    if per_win > 0 {
+        let mut winners: Vec<(usize,Hash256)> =
+            winners_idx.iter().map(|&i| (i, reward_rank(y_edge_s, &part_set_sorted[i]))).collect();
+        winners.sort_by(|a,b| a.1.cmp(&b.1));
+        for (idx, _rank) in winners {
+            credit_pk(&part_set_sorted[idx], per_win);
+        }
+    }
+    if lot_rem > 0 { burn_fn(lot_rem); }
+}
+
+
+⸻
+
+8) Settlement pipeline within slot s (exact order)
+	1.	Execute user transfers admitted by obex.α III with s_exec = s (debit sender, credit recipient).
+	2.	Fee escrow: create one ESCROW_CREDIT system transaction for the sum of integer fees; update fee_escrow.
+	3.	Escrow releases: in order VERIFIER_CREDIT, TREASURY_CREDIT, BURN, emit system transactions for any whole μOBX released (bounded by escrow).
+	4.	Emission: call on_slot_emission and emit a single EMISSION_CREDIT system transaction crediting the DRP (Verifier Pool).
+	5.	DRP distribution: call distribute_drp_for_slot with P_s and y_edge_s; emit REWARD_PAYOUT system transactions and a BURN for any residuals.
+	6.	Build txroot_s: include user txs and all system txs in canonical order (see §6) and commit via obex.α II in Header_{s+1}.
+
+⸻
+
+9) Ledger state (consensus-visible) & invariants
+
+State:
+	•	EmissionState (§2)
+	•	FeeSplitState (§4) — includes escrow, burned total, fractional accumulators, epoch snapshot
+	•	SYS_* balances — ordinary account balances for Verifier Pool, Treasury, Burn, and Escrow
+	•	DRP corpus is simply balance(SYS_VERIFIER_POOL) at settlement time
+
+Invariants (asserted by executor):
+	•	At LAST_EMISSION_SLOT: total_emitted_μ == TOTAL_SUPPLY_μOBX.
+	•	Fee conservation for any slot:
+
+ΔEscrow = +Σ fee_int(user txs settled in s) − (release_verifier + release_treasury + release_burn)
+
+
+	•	Sum of all system debits equals sum of system credits plus burns (including residual burns from DRP rounding).
+
+⸻
+
+10) Conformance checklist (engineer-facing)
+	•	Integers are LE fixed-width; vector lengths (if any) use LE(4); no alternate encodings.
+	•	Tags used exactly: "obex.sys.tx", "obex.reward.draw", "obex.reward.rank", and "obex.merkle.*".
+	•	Emission uses the U256 rational accumulator; denominator doubles each halving; terminal equality holds.
+	•	Fee rule matches obex.α III; integer fees first credit escrow.
+	•	NLB splits roll only at NLB_EPOCH_SLOTS boundaries; releases are bounded by escrow with deterministic priority (Burn → Treasury → Verifier).
+	•	DRP: uses committed P_s and y_edge_s; baseline & lottery are integer; residuals burn; winner selection via rejection sampling and deterministic payout order.
+	•	All tokenomics-originated writes are emitted as system transactions in the canonical order in §6 and included in txroot_s.
+	•	No floats or clocks anywhere in consensus code.
+
+⸻
+
+11) Test vectors (ship with implementation)
+
+Provide hex for inputs and outputs (including all sys-tx payloads and cumulative balances).
+	1.	Nominal slot: a batch of user transfers with mixed amounts (below/above flat switch), showing escrow credit, releases, emission credit, DRP payouts, residual burns, and final pool/escrow balances.
+	2.	Underfunded escrow: construct fees such that fractional accumulators imply a larger release than escrow holds; verify deterministic reduction order.
+	3.	Boundary halving: last slot of a halving period → next slot; show R0_DEN doubling and continuity of payouts.
+	4.	DRP zero per-share: tiny DRP corpus with per_base==0 and per_win==0 → carry forward; next slot larger corpus pays correctly.
+	5.	Terminal supply: final emission slot asserts total_emitted_μ == TOTAL_SUPPLY_μOBX.
+	6.	Winner uniformity: fix P_s, sweep the PRNG counter; demonstrate exactly K unique winners with no modulo bias other than % m.
+
+⸻
+
+12) Public API summary (host-node integration)
+
+// Emission (once per slot in settlement)
+on_slot_emission(
+    st: &mut EmissionState,
+    slot_1based: u128,
+    credit_emission: impl FnMut(u128),        // emits EMISSION_CREDIT sys tx
+)
+
+// Transfer processing (per executed user tx)
+process_transfer(
+    slot: u64,
+    sender_balance_μ: u128,
+    amount_μ: u128,
+    fs: &mut FeeSplitState,
+    debit_sender:    impl FnMut(u128),        // user debit
+    credit_recipient:impl FnMut(u128),        // user credit
+    escrow_credit:   impl FnMut(u128),        // ESCROW_CREDIT sys tx
+    credit_verifier: impl FnMut(u128),        // VERIFIER_CREDIT sys tx
+    credit_treasury: impl FnMut(u128),        // TREASURY_CREDIT sys tx
+    burn:            impl FnMut(u128),        // BURN sys tx
+) -> (u128 /*total_debit*/, u128 /*fee_int*/)
+
+// DRP distribution (once per slot after emission & releases)
+distribute_drp_for_slot(
+    s: u64,
+    y_edge_s: &Hash256,
+    part_set_sorted: &[Hash256],              // P_s
+    read_pool_balance: impl FnMut() -> u128,  // SYS_VERIFIER_POOL balance
+    debit_pool:        impl FnMut(u128),      // DRP total payout
+    credit_pk:         impl FnMut(&Hash256,u128), // REWARD_PAYOUT sys tx
+    burn:              impl FnMut(u128),      // BURN sys tx
+)
+
+
+⸻
+
+This obex.α T blueprint is complete, byte-precise, and fully coherent with obex.α I/II/III.
+It specifies exact encodings, integer-exact emissions, escrow-based fee routing, epoch-stable splits, and deterministic per-slot rewards keyed by committed participation and the beacon edge. Implementations that follow this document will agree bit-for-bit on token flows, rewards, and txroot_s contents for every slot.

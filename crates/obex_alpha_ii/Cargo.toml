@@ -1,0 +1,19 @@
+[package]
+name = "obex_alpha_ii"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Obex α II — Deterministic Header Engine (forkless by equalities)"
+repository = "https://github.com/obex-labs/obex-alpha"
+readme = "../../README.md"
+keywords = ["obex","consensus","header","merkle"]
+categories = ["cryptography","algorithms","data-structures"]
+
+[dependencies]
+obex_primitives = { path = "../obex_primitives" }
+thiserror = "2.0"
+
+[dev-dependencies]
+hex = "0.4"
+
+

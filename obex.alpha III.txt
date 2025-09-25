@@ -1,0 +1,598 @@
+obex.alpha III
+
+obex.α III — Deterministic Admission (final within slot)
+
+Production blueprint (byte-precise, Rust-ready pseudocode).
+Role: Decide, in the 0–100 ms finality window of slot s, which transactions enter the protocol; bind each admitted transaction to (slot=s, y_{s-1}); reserve funds and fees exactly; emit canonical TicketRecords that Merklize to ticket_root_s.
+Consumes: y_{s-1} = parent.vdf_y_edge (Beacon), slot = s.
+Produces: Canonical TicketRecords for slot s and the Merkle commitment ticket_root_s.
+Coheres with:
+	•	obex.α II: ticket_root_s is a validity equality in the header.
+	•	obex.α I: independent; both bind to the same y_{s-1}.
+	•	obex.α T: fee rule and reservation are identical; executor settles in the 100–1000 ms settlement window of the same slot.
+
+Everything below is normative. Tags, field order, lengths, and comparisons MUST match exactly; independent implementations agree bit-for-bit.
+
+⸻
+
+1) Canonical hashing, encodings, and Merkle (normative)
+
+Integers: little-endian fixed width only. LE(x, W) emits exactly W bytes (no overlong encodings).
+Hash type: Hash256 = [u8; 32].
+
+Domain-tagged SHA3-256 with length framing (global discipline):
+
+H(tag_ascii, parts[]) =
+    SHA3_256( UTF8(tag_ascii) || Σ ( LE(|p|,8) || p ) )
+
+Binary Merkle tree (duplicate last when odd):
+	•	Leaf: H("obex.merkle.leaf", payload)
+	•	Node: H("obex.merkle.node", L || R)
+	•	Empty: H("obex.merkle.empty", [])
+
+Normative tags used in obex.α III:
+
+"obex.tx.access"      "obex.tx.body.v1"     "obex.tx.id"       "obex.tx.commit"
+"obex.tx.sig"         "obex.ticket.id"      "obex.ticket.leaf"
+"obex.merkle.leaf"    "obex.merkle.node"    "obex.merkle.empty"
+
+Any byte change to tag strings changes consensus.
+
+⸻
+
+2) Currency units and fee rule (shared with obex.α T)
+	•	Base unit: micro-obex (μOBX).
+1 OBX = 100_000_000 μOBX.
+	•	Deterministic fee function (integer-exact, enforced at admission):
+	•	If 10 ≤ amount_μ ≤ 1000 → fee_μ = 10.
+	•	If amount_μ ≥ 1001      → fee_μ = ceil( amount_μ / 100 ) = (amount_μ + 99) / 100.
+
+Consensus constants (α III):
+
+MIN_TX_μOBX        = 10
+FLAT_SWITCH_μOBX   = 1_000
+FLAT_FEE_μOBX      = 10
+
+
+⸻
+
+3) Access list and canonical encoding
+
+Access lists are opaque scheduling hints for the executor; α III treats them as bytes but encodes them canonically.
+
+AccessList {
+    read_accounts  : list<PK>   // PK = [u8;32], sorted asc, deduplicated
+    write_accounts : list<PK>   // PK = [u8;32], sorted asc, deduplicated
+}
+
+Canonical bytes (normative):
+
+encode_access(a) =
+    H("obex.tx.access", [])
+    || LE(|R|,4) || concat(R[0..|R|-1])
+    || LE(|W|,4) || concat(W[0..|W|-1])
+
+Where R and W are lexicographically sorted (raw 32-byte) and deduplicated.
+
+⸻
+
+4) Transaction body, identifiers, and signature (normative)
+
+TxBodyV1 {
+    sender       : PK[32]
+    recipient    : PK[32]
+    nonce        : u64
+    amount_μ     : u128         // μOBX
+    fee_μ        : u128         // must equal fee(amount_μ)
+    s_bind       : u64          // must equal current slot s
+    y_bind       : Hash256      // must equal y_{s-1}
+    access       : AccessList
+    memo         : Bytes        // LE(4) length-prefixed; mempool policy caps size
+}
+
+Canonical bytes (exact order):
+
+canonical_tx_bytes(tx) =
+    H("obex.tx.body.v1", [])
+    || sender
+    || recipient
+    || LE(nonce,8)
+    || LE(amount_μ,16)
+    || LE(fee_μ,16)
+    || LE(s_bind,8)
+    || y_bind
+    || encode_access(access)
+    || LE(|memo|,4) || memo
+
+Identifiers and signature (normative):
+
+txid   = H("obex.tx.id",     [ canonical_tx_bytes(tx) ])
+commit = H("obex.tx.commit", [ canonical_tx_bytes(tx) ])
+
+msg_to_sign = H("obex.tx.sig", [ canonical_tx_bytes(tx) ])
+VerifySig(sender_pk, msg_to_sign, sig) -> bool   // unique, non-malleable (e.g., 32-byte PK + 64-byte Ed25519)
+
+
+⸻
+
+5) TicketRecord and per-slot admission root (normative)
+
+When a transaction is admitted in slot s, α III emits:
+
+TicketRecord {
+    ticket_id   : Hash256 = H("obex.ticket.id", [ txid, LE(s,8) ])
+    txid        : Hash256
+    sender      : PK[32]
+    nonce       : u64
+    amount_μ    : u128
+    fee_μ       : u128
+    s_admit     : u64    // s
+    s_exec      : u64    // s  (same-slot settlement)
+    commit_hash : Hash256 // commit
+}
+
+Canonical Merkle leaf payload:
+
+enc_ticket_leaf(t) =
+    H("obex.ticket.leaf", [])
+    || t.ticket_id
+    || t.txid
+    || t.sender
+    || LE(t.nonce,8)
+    || LE(t.amount_μ,16)
+    || LE(t.fee_μ,16)
+    || LE(t.s_admit,8)
+    || LE(t.s_exec,8)
+    || t.commit_hash
+
+Per-slot admission root:
+	•	Collect all TicketRecords for slot s.
+	•	Sort ascending by txid (raw bytes).
+	•	Leaves = enc_ticket_leaf(t) for each.
+	•	ticket_root_s = MerkleRoot(leaves) (binary; duplicate last; empty = H("obex.merkle.empty",[])).
+
+⸻
+
+6) Deterministic admission procedure (= finality at admission)
+
+Inputs: (tx: TxBodyV1, sig: Sig), current slot s, y_{s-1}.
+State: balances, nonces, reserved amounts, per-slot TicketRecord map.
+
+All checks MUST pass in order; on success, state writes are atomic.
+	1.	Signature
+VerifySig(tx.sender, H("obex.tx.sig",[canonical_tx_bytes(tx)]), sig) == true.
+	2.	Slot binding
+tx.s_bind == s.
+	3.	Beacon binding
+tx.y_bind == y_{s-1}.
+	4.	Nonce equality
+tx.nonce == next_nonce[tx.sender].
+	5.	Amount & fee rule
+	•	tx.amount_μ ≥ MIN_TX_μOBX.
+	•	tx.fee_μ == fee(tx.amount_μ) where
+
+if amount_μ ≤ 1000  => 10
+else                => (amount_μ + 99)/100
+
+
+	6.	Funds & reservation (integer-exact; overflow-safe)
+	•	total = amount_μ + fee_μ (saturating add).
+	•	spendable[sender] ≥ total.
+	•	Mutate atomically:
+
+spendable[sender] -= total
+reserved[sender]  += total
+next_nonce[sender]++
+
+
+	7.	Execution slot
+s_exec = s.
+	8.	Emit TicketRecord
+Build as in §5; insert into admitted_by_slot[s] and index by txid.
+
+Finality condition: A transaction is final for admission in slot s iff it passes steps 1–8 and is present in the canonical ticket_root_s. Any header for slot s that omits it is invalid under obex.α II equality.
+
+⸻
+
+7) Canonical per-slot processing order (determinism)
+
+To ensure identical results across honest nodes:
+	1.	Build the candidate multiset C_s from all signed blobs with (tx.s_bind == s, tx.y_bind == y_{s-1}).
+	2.	Form the candidate set U_s by unique txid (identical bodies are identical txids).
+	3.	Sort U_s by ascending txid (raw bytes).
+	4.	Iterate in that order, applying §6 under the evolving state; reject deterministically on any failed step.
+	5.	The resulting TicketRecord list and ticket_root_s are canonical.
+
+Network must ensure missing bodies can be fetched to recompute ticket_root_s during header validation. Consensus binds to the Merkle root, not arrival order.
+
+⸻
+
+8) Rust-ready module (byte-precise pseudocode)
+
+Replace sha3_256 and signature verification with vetted implementations. All encodings, tags, and field orders are consensus-critical.
+
+// =========================== obex_alpha_iii.rs ============================
+// obex.α III — Deterministic Admission (finality within slot)
+// Byte-precise, coherent with obex.α II (header) and obex.α T (tokenomics).
+// ==========================================================================
+
+#![allow(unused)]
+use alloc::vec::Vec;
+use alloc::collections::{BTreeMap, BTreeSet};
+
+// ——— Types ————————————————————————————————————————————————————————
+pub type Hash256 = [u8; 32];
+pub type PK      = [u8; 32];
+pub type Sig     = [u8; 64];
+
+// ——— Integer encodings ———————————————————————————————————————————
+#[inline]
+pub fn le_bytes<const W: usize>(mut x: u128) -> [u8; W] {
+    let mut out = [0u8; W];
+    for i in 0..W { out[i] = (x & 0xFF) as u8; x >>= 8; }
+    out
+}
+
+// ——— Hashing (domain-tagged, length-framed) ————————————————————
+pub fn sha3_256(_input: &[u8]) -> Hash256 { unimplemented!() }
+
+#[inline]
+pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(tag.as_bytes());
+    for p in parts {
+        buf.extend_from_slice(&le_bytes::<8>(p.len() as u128));
+        buf.extend_from_slice(p);
+    }
+    sha3_256(&buf)
+}
+
+// ——— Signature verification (unique, non-malleable encoding) ————
+pub fn verify_sig(_pk: &PK, _msg: &[u8], _sig: &Sig) -> bool {
+    // Replace with Ed25519/Schnorr verification; reject non-canonical encodings.
+    unimplemented!()
+}
+
+// ——— Merkle (binary; duplicate last on odd) ————————————————
+pub fn merkle_leaf(payload: &[u8]) -> Hash256 { h_tag("obex.merkle.leaf", &[payload]) }
+
+pub fn merkle_node(l: &Hash256, r: &Hash256) -> Hash256 {
+    let mut cat = [0u8; 64];
+    cat[..32].copy_from_slice(l);
+    cat[32..].copy_from_slice(r);
+    h_tag("obex.merkle.node", &[&cat])
+}
+
+pub fn merkle_root(leaves_payload: &[Vec<u8>]) -> Hash256 {
+    if leaves_payload.is_empty() { return h_tag("obex.merkle.empty", &[]); }
+    let mut level: Vec<Hash256> = leaves_payload.iter().map(|p| merkle_leaf(p)).collect();
+    while level.len() > 1 {
+        if level.len() % 2 == 1 { level.push(*level.last().unwrap()); }
+        let mut next = Vec::with_capacity(level.len()/2);
+        for i in (0..level.len()).step_by(2) { next.push(merkle_node(&level[i], &level[i+1])); }
+        level = next;
+    }
+    level[0]
+}
+
+// ——— Fee constants & rule (μOBX) ——————————————————————————————
+pub const MIN_TX_uOBX:       u128 = 10;
+pub const FLAT_SWITCH_uOBX:  u128 = 1_000;  // ≤1000 => flat fee
+pub const FLAT_FEE_uOBX:     u128 = 10;     // flat fee
+pub const PCT_DEN:           u128 = 100;    // 1%
+
+#[inline]
+pub fn fee_int_uobx(amount_u: u128) -> u128 {
+    assert!(amount_u >= MIN_TX_uOBX);
+    if amount_u <= FLAT_SWITCH_uOBX { FLAT_FEE_uOBX }
+    else { (amount_u + (PCT_DEN - 1)) / PCT_DEN }  // ceil(1% of amount)
+}
+
+// ——— Access list & canonical encoding ————————————————————————
+#[derive(Clone, Default)]
+pub struct AccessList {
+    pub read_accounts:  Vec<PK>,
+    pub write_accounts: Vec<PK>,
+}
+
+fn sort_dedup(mut v: Vec<PK>) -> Vec<PK> { v.sort(); v.dedup(); v }
+
+pub fn encode_access(a: &AccessList) -> Vec<u8> {
+    let mut R = sort_dedup(a.read_accounts.clone());
+    let mut W = sort_dedup(a.write_accounts.clone());
+    let mut out = Vec::new();
+    out.extend_from_slice(&h_tag("obex.tx.access", &[]));
+    out.extend_from_slice(&le_bytes::<4>(R.len() as u128));
+    for pk in &R { out.extend_from_slice(pk); }
+    out.extend_from_slice(&le_bytes::<4>(W.len() as u128));
+    for pk in &W { out.extend_from_slice(pk); }
+    out
+}
+
+// ——— Transaction body, canonical bytes, IDs ————————————————
+#[derive(Clone)]
+pub struct TxBodyV1 {
+    pub sender:      PK,
+    pub recipient:   PK,
+    pub nonce:       u64,
+    pub amount_u:    u128, // μOBX
+    pub fee_u:       u128, // μOBX
+    pub s_bind:      u64,
+    pub y_bind:      Hash256,
+    pub access:      AccessList,
+    pub memo:        Vec<u8>,
+}
+
+pub fn canonical_tx_bytes(tx: &TxBodyV1) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&h_tag("obex.tx.body.v1", &[]));
+    out.extend_from_slice(&tx.sender);
+    out.extend_from_slice(&tx.recipient);
+    out.extend_from_slice(&le_bytes::<8>(tx.nonce as u128));
+    out.extend_from_slice(&le_bytes::<16>(tx.amount_u));
+    out.extend_from_slice(&le_bytes::<16>(tx.fee_u));
+    out.extend_from_slice(&le_bytes::<8>(tx.s_bind as u128));
+    out.extend_from_slice(&tx.y_bind);
+    out.extend_from_slice(&encode_access(&tx.access));
+    out.extend_from_slice(&le_bytes::<4>(tx.memo.len() as u128));
+    out.extend_from_slice(&tx.memo);
+    out
+}
+
+pub fn txid(tx: &TxBodyV1) -> Hash256 {
+    h_tag("obex.tx.id", &[&canonical_tx_bytes(tx)])
+}
+
+pub fn tx_commit(tx: &TxBodyV1) -> Hash256 {
+    h_tag("obex.tx.commit", &[&canonical_tx_bytes(tx)])
+}
+
+// ——— TicketRecord & canonical leaf encoding ————————————————
+#[derive(Clone)]
+pub struct TicketRecord {
+    pub ticket_id:   Hash256,
+    pub txid:        Hash256,
+    pub sender:      PK,
+    pub nonce:       u64,
+    pub amount_u:    u128,
+    pub fee_u:       u128,
+    pub s_admit:     u64,
+    pub s_exec:      u64,      // == s_admit
+    pub commit_hash: Hash256,
+}
+
+pub fn enc_ticket_leaf(t: &TicketRecord) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&h_tag("obex.ticket.leaf", &[]));
+    out.extend_from_slice(&t.ticket_id);
+    out.extend_from_slice(&t.txid);
+    out.extend_from_slice(&t.sender);
+    out.extend_from_slice(&le_bytes::<8>(t.nonce as u128));
+    out.extend_from_slice(&le_bytes::<16>(t.amount_u));
+    out.extend_from_slice(&le_bytes::<16>(t.fee_u));
+    out.extend_from_slice(&le_bytes::<8>(t.s_admit as u128));
+    out.extend_from_slice(&le_bytes::<8>(t.s_exec as u128));
+    out.extend_from_slice(&t.commit_hash);
+    out
+}
+
+// ——— α III state (reference in-memory model) ———————————————
+#[derive(Default)]
+pub struct AlphaIIIState {
+    // balances
+    pub spendable_u: BTreeMap<PK, u128>, // μOBX
+    pub reserved_u:  BTreeMap<PK, u128>, // μOBX
+    pub next_nonce:  BTreeMap<PK, u64>,
+
+    // per-slot admission artifacts
+    pub admitted_by_slot: BTreeMap<u64, Vec<TicketRecord>>, // s -> TicketRecords
+    pub tickets_by_txid:  BTreeMap<Hash256, TicketRecord>,  // txid -> record
+}
+
+impl AlphaIIIState {
+    pub fn spendable_of(&self, pk: &PK) -> u128 { *self.spendable_u.get(pk).unwrap_or(&0) }
+    pub fn reserved_of(&self,  pk: &PK) -> u128 { *self.reserved_u .get(pk).unwrap_or(&0) }
+    pub fn nonce_of(&self,     pk: &PK) -> u64  { *self.next_nonce .get(pk).unwrap_or(&0) }
+}
+
+// ——— Admission result types ————————————————————————————————
+pub enum AdmitErr {
+    BadSig,
+    WrongSlot,
+    WrongBeacon,
+    NonceMismatch,
+    BelowMinAmount,
+    FeeMismatch,
+    InsufficientFunds,
+}
+
+pub enum AdmitResult {
+    Finalized(TicketRecord), // admission success
+    Rejected(AdmitErr),
+}
+
+// ——— Single-transaction admission (deterministic) ————————————
+pub fn admit_single(
+    tx: &TxBodyV1,
+    sig: &Sig,
+    s_now: u64,
+    y_prev: &Hash256,      // y_{s-1}
+    st: &mut AlphaIIIState,
+) -> AdmitResult {
+    // 1) Signature
+    let msg = h_tag("obex.tx.sig", &[&canonical_tx_bytes(tx)]);
+    if !verify_sig(&tx.sender, &msg, sig) {
+        return AdmitResult::Rejected(AdmitErr::BadSig);
+    }
+
+    // 2) Slot & beacon binding
+    if tx.s_bind != s_now   { return AdmitResult::Rejected(AdmitErr::WrongSlot); }
+    if tx.y_bind != *y_prev { return AdmitResult::Rejected(AdmitErr::WrongBeacon); }
+
+    // 3) Nonce equality
+    if tx.nonce != st.nonce_of(&tx.sender) {
+        return AdmitResult::Rejected(AdmitErr::NonceMismatch);
+    }
+
+    // 4) Amount & fee rule (integer-exact)
+    if tx.amount_u < MIN_TX_uOBX {
+        return AdmitResult::Rejected(AdmitErr::BelowMinAmount);
+    }
+    if tx.fee_u != fee_int_uobx(tx.amount_u) {
+        return AdmitResult::Rejected(AdmitErr::FeeMismatch);
+    }
+
+    // 5) Funds & reservation
+    let total = tx.amount_u.saturating_add(tx.fee_u);
+    if st.spendable_of(&tx.sender) < total {
+        return AdmitResult::Rejected(AdmitErr::InsufficientFunds);
+    }
+
+    *st.spendable_u.entry(tx.sender).or_insert(0) -= total;
+    *st.reserved_u .entry(tx.sender).or_insert(0) += total;
+    *st.next_nonce.entry(tx.sender).or_insert(0)  += 1;
+
+    // 6) Deterministic execution slot (same slot)
+    let xid    = txid(tx);
+    let s_exec = s_now;
+
+    // 7) Emit TicketRecord
+    let rec = TicketRecord {
+        ticket_id:   h_tag("obex.ticket.id", &[&xid, &le_bytes::<8>(s_now as u128)]),
+        txid:        xid,
+        sender:      tx.sender,
+        nonce:       tx.nonce,
+        amount_u:    tx.amount_u,
+        fee_u:       tx.fee_u,
+        s_admit:     s_now,
+        s_exec:      s_exec,
+        commit_hash: tx_commit(tx),
+    };
+
+    st.admitted_by_slot.entry(s_now).or_default().push(rec.clone());
+    st.tickets_by_txid.insert(rec.txid, rec.clone());
+
+    AdmitResult::Finalized(rec)
+}
+
+// ——— Canonical batch admission for slot s ————————————————
+pub fn admit_slot_canonical(
+    s_now: u64,
+    y_prev: &Hash256,
+    candidates_sorted: &[(TxBodyV1, Sig)], // sorted by txid ascending
+    st: &mut AlphaIIIState,
+) -> Vec<TicketRecord> {
+    let mut out = Vec::new();
+    for (tx, sig) in candidates_sorted {
+        match admit_single(tx, sig, s_now, y_prev, st) {
+            AdmitResult::Finalized(rec) => out.push(rec),
+            AdmitResult::Rejected(_)    => { /* ignore for this slot */ }
+        }
+    }
+    out
+}
+
+// ——— Build per-slot ticket_root (leaves + root) ————————————
+pub fn build_ticket_root_for_slot(s: u64, st: &AlphaIIIState) -> (Vec<Vec<u8>>, Hash256) {
+    let mut L = st.admitted_by_slot.get(&s).cloned().unwrap_or_default();
+    // Canonical order: ascending txid (raw bytes)
+    L.sort_by(|a, b| a.txid.cmp(&b.txid));
+    let leaves: Vec<Vec<u8>> = L.iter().map(|t| enc_ticket_leaf(t)).collect();
+    let root = merkle_root(&leaves);
+    (leaves, root)
+}
+
+
+⸻
+
+9) Pipeline integration (per slot s)
+
+Finality window (0–100 ms):
+	1.	Beacon validates y_{s-1} and seeds for s (via α II’s adapter).
+	2.	obex.α III:
+	•	Gather candidates with (s_bind == s, y_bind == y_{s-1}).
+	•	Deduplicate by txid, sort ascending.
+	•	Run admit_slot_canonical.
+	•	Compute (leaves_s, ticket_root_s) = build_ticket_root_for_slot(s, …).
+	3.	obex.α II: Asserts ticket_root_s equality in the header.
+
+Settlement window (100–1000 ms of the same slot s):
+	•	Executor settles each TicketRecord with s_exec = s (ledger debits/credits), credits fee escrow, performs fee routing (α T), materializes system transactions, and emits txroot_s that α II commits in Header_{s+1}.
+
+⸻
+
+10) Determinism, safety, and DoS hardening
+	•	Determinism: Candidate set unique by txid, strict byte-lexicographic ordering, and stepwise admission under evolving state yields the same admitted subset on every honest node.
+	•	Finality at admission: Inclusion in ticket_root_s is final for admission; any header omitting it is invalid by equality.
+	•	Replay resistance: (s_bind == s) and (y_bind == y_{s-1}) bind the transaction to the parent beacon lineage; replay across slots fails equalities.
+	•	Economic integrity: Reservation of amount_μ + fee_μ at admission prevents underfunding at settlement; fee equality enforces α T policy.
+	•	DoS limits: Mempool should cap memo size and per-slot candidate volume; consensus objects (TicketRecords and leaves) are fixed-size; Merkle work is linear; signature checks are bounded.
+
+⸻
+
+11) Genesis and edge cases
+	•	Genesis slot S0: If no admissions, ticket_root_{S0} = H("obex.merkle.empty",[]).
+	•	Empty slot: same root as above.
+	•	Overflow checks: Use saturating arithmetic when forming totals; treat actual overflows (impractical with u128) as invalid inputs and reject admission.
+
+⸻
+
+12) Conformance checklist (engineer-facing)
+	•	Integers are LE fixed-width; vector lengths are LE(4) exactly.
+	•	Tags used exactly as listed in §1/§4/§5.
+	•	encode_access sorts & dedups PKs; encodes counts with LE(4).
+	•	canonical_tx_bytes order exact; memo is LE(4) length-prefixed.
+	•	txid = H("obex.tx.id",[canonical_tx_bytes]), commit = H("obex.tx.commit",[canonical_tx_bytes]).
+	•	Signature verified over H("obex.tx.sig",[canonical_tx_bytes]) with unique, non-malleable encoding.
+	•	Admission steps 1–8 enforced exactly; atomic state updates on success.
+	•	Per-slot canonical selection: unique by txid, sorted asc, iterate under evolving state.
+	•	enc_ticket_leaf byte layout exact; ticket_root_s = MerkleRoot(leaves) with binary/dup-last rules; empty = H("obex.merkle.empty",[]).
+	•	s_exec == s_admit == s.
+	•	Providers used by α II recompute the same ticket_root_s.
+
+⸻
+
+13) Test vectors (ship with implementation)
+
+Provide hex for inputs, canonical bytes, and outputs.
+	1.	Nominal admission batch — 2–3 valid transactions with increasing nonces.
+	•	Outputs: txids, TicketRecords, enc_ticket_leaf bytes, ticket_root_s.
+	2.	Fee mismatch — identical tx with fee_μ off by 1 → FeeMismatch.
+	3.	Wrong beacon — y_bind ≠ y_{s-1} → WrongBeacon.
+	4.	Nonce conflict — two txs from same sender with same nonce; only the lower txid admits under evolving state; the other → NonceMismatch or insufficient funds depending on order.
+	5.	Insufficient funds — sender balance < amount_μ + fee_μ → InsufficientFunds.
+	6.	Empty slot — no admissions → ticket_root_s = H("obex.merkle.empty",[]).
+	7.	Order invariance — shuffle candidate arrival; admitted set & ticket_root_s are identical due to canonical txid sorting.
+
+⸻
+
+14) Public API summary (host-node integration)
+
+// Admit a single transaction (deterministic, stateful)
+admit_single(
+    tx: &TxBodyV1,
+    sig: &Sig,
+    s_now: u64,
+    y_prev: &Hash256,
+    st: &mut AlphaIIIState,
+) -> AdmitResult
+
+// Admit a deduplicated, txid-ascending batch for slot s
+admit_slot_canonical(
+    s_now: u64,
+    y_prev: &Hash256,
+    candidates_sorted: &[(TxBodyV1, Sig)],
+    st: &mut AlphaIIIState,
+) -> Vec<TicketRecord>
+
+// Build the canonical per-slot root (consumed by obex.α II)
+build_ticket_root_for_slot(
+    s: u64,
+    st: &AlphaIIIState,
+) -> (Vec<Vec<u8>>, Hash256)  // (leaves, ticket_root_s)
+
+
+⸻
+
+This obex.α III blueprint is complete and byte-precise.
+It specifies exact encodings, deterministic admission checks, canonical leaf layouts, and a verifier-cheap Merkle commitment. Implementations following this document will agree bit-for-bit on admission decisions and ticket_root_s for every slot.

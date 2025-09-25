@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "crates/obex_primitives",
+    "crates/obex_alpha_i",
+    "crates/obex_alpha_ii",
+    "crates/obex_alpha_iii",
+    "crates/obex_alpha_t",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Obex Labs <engineering@obex.example>"]
+version = "0.1.0"
+
+

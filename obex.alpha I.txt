@@ -1,0 +1,602 @@
+obex.alpha I
+
+obex.α I — Participation Engine (VRF-salted, RAM-hard, byte-precise)
+
+Production blueprint (byte-precise, Rust-ready pseudocode).
+Role: Produce a deterministic participation set P_s per slot s, dominated by main-memory bandwidth for Sybil cost, with validator work reduced to deterministic equality checks and Merkle verifications.
+Coherence:
+	•	Beacon: Consumes the parent slot’s VDF edge y_edge_{s-1} and the parent header id parent_id from obex.α II.
+	•	Header: Exposes only P_s and the commitment part_root_s, which obex.α II commits into the header (field part_root).
+	•	Economics: P_s is consumed by obex.α T for rewards; no monetary logic appears in α I.
+
+The specification below is normative. All tags, field orders, widths, and equality checks are exact. Independent implementations MUST agree bit-for-bit.
+
+⸻
+
+1. Scope & Outputs
+
+Per slot s:
+	•	P_s — the lexicographically sorted vector of 32-byte public keys that submitted exactly one valid proof bound to slot s.
+	•	part_root_s — binary Merkle root over P_s leaves with deterministic payload (see §8).
+
+Pipeline alignment:
+	•	Proving (participants): During settlement of slot s−1 (~100–1000 ms), fill labels in RAM, compute root, open Q challenges, sign, submit ObexPartRec targeting slot = s.
+	•	Verification (validators): During finality of slot s (0–100 ms), verify proofs, deduplicate per pk, sort, materialize P_s and part_root_s.
+
+⸻
+
+2. Consensus Constants
+
+OBEX_ALPHA_I_VERSION = 1
+
+MEM_MIB            = 512                 // target RAM per prover instance
+LABEL_BYTES        = 32                  // SHA3-256 width
+N_LABELS           = (MEM_MIB * 2^20) / LABEL_BYTES
+                   = 512 * 1,048,576 / 32
+                   = 16,777,216          // 2^24 labels
+
+PASSES             = 3                   // diffusion passes
+DEPS               = 2                   // parents per update (J,K)
+CHALLENGES_Q       = 96                  // residual cheat ≈ 2^-96
+MERKLE_ARITY       = 2                   // binary (duplicate last if odd)
+
+MAX_PARTREC_SIZE   = 600,000 bytes       // DoS cap on serialized proof
+MAX_SUBMISSIONS_PK = 1                   // one submission per (slot, pk)
+
+Deployments MAY additionally publish a “Lite” parameter set (e.g., MEM_MIB=256, PASSES=2). Any variation MUST be consensus-versioned (not mixed).
+
+⸻
+
+3. Hashing, Encodings, and Tags (Normative)
+	•	Integer encoding: Little-endian, fixed-width only. LE(x, W) emits exactly W bytes. No overlong encodings.
+	•	Hash type: Hash256 = [u8; 32].
+
+Domain-tagged SHA3-256 with length framing:
+
+H(tag_ascii, parts[]) =
+    SHA3_256( UTF8(tag_ascii) || Σ ( LE(|p|,8) || p ) )
+
+Binary Merkle (duplicate last on odd):
+	•	Leaf: H("obex.merkle.leaf", payload)
+	•	Node: H("obex.merkle.node", L || R)
+	•	Empty: H("obex.merkle.empty", [])
+
+Normative ASCII tags (exact):
+
+"obex.alpha"     "obex.vrfy"       "obex.seed"      "obex.partrec"
+"obex.l0"        "obex.lbl"        "obex.idx"       "obex.chal"
+"obex.part.leaf" "obex.merkle.leaf" "obex.merkle.node" "obex.merkle.empty"
+
+Signature & VRF:
+	•	Signature: Ed25519, 32-byte public key, 64-byte canonical signature (unique, non-malleable encoding).
+	•	VRF: ECVRF over edwards25519 per RFC 9381 (ECVRF-EDWARDS25519-SHA512-TAI). Proof bytes vrf_pi are the RFC’s canonical encoding. Verifier result vrf_y MUST be 64 bytes (RFC output).
+
+⸻
+
+4. RAM-Hard Label Function (Memory-Dominant)
+
+Let seed_s be the per-slot, per-key seed (defined in §6). Define the label array L[0..N-1]:
+	•	L[0] = H("obex.l0", [seed_s])
+	•	For each pass p ∈ {0..PASSES−1} and index i ∈ {1..N−1}:
+
+J(i,p) = U64LE( H("obex.idx", [seed_s, LE(i,8), LE(p,4), 0x00])[0..8] ) % i
+K(i,p) = U64LE( H("obex.idx", [seed_s, LE(i,8), LE(p,4), 0x01])[0..8] ) % i
+
+L[i] := H("obex.lbl", [seed_s, LE(i,8), L[i-1], L[J(i,p)], L[K(i,p)]])
+
+
+
+Performance note (informative): Each update reads 3×32 B and writes 32 B (~128 B). With N=2^24, traffic is ≈2 GiB per pass → ≈6 GiB total (3 passes). This enforces main-memory bandwidth dominance.
+
+⸻
+
+5. Merkle Commitment (Over Raw 32-byte Labels)
+
+root = MerkleRoot( leaves = [ L[0], L[1], …, L[N-1] ] )
+
+Each leaf payload is exactly the 32-byte label L[i] (no length prefix at payload level; the leaf hash domain tags it).
+
+⸻
+
+6. Binding, VRF Input, and Deterministic Challenges
+
+6.1 VRF input α (slot- and identity-bound)
+
+Given parent_id = header_id(parent) and y_edge_{s-1} = parent.vdf_y_edge from obex.α II, and a prover’s VRF public key vrf_pk:
+
+alpha = H("obex.alpha", [
+  parent_id,            // 32
+  LE(slot,8),           // target slot s
+  y_edge_{s-1},         // 32
+  vrf_pk                // 32
+]) // 32 bytes (Hash256)
+
+Prover computes (vrf_y, vrf_pi) = ECVRF.Prove(vrf_sk, alpha). Verifiers MUST check ECVRF.Verify(vrf_pk, alpha, vrf_pi) → vrf_y.
+
+6.2 Seed derivation (per-slot, per-key)
+
+To couple VRF personalization with RAM hardness:
+
+seed_s = H("obex.seed", [ y_edge_{s-1}, pk_ed25519, vrf_y ])
+
+This pins all label work to the parent’s beacon and the prover’s identity+VRF output (no grinding surface once alpha is fixed).
+
+6.3 Challenge indices
+
+For t ∈ {0..CHALLENGES_Q−1}:
+
+i_t = 1 + ( U64LE( H("obex.chal",
+         [ y_edge_{s-1}, root, vrf_y, LE(t,4) ])[0..8] ) % (N_LABELS - 1) )
+
+Indices are in [1..N−1] so i−1 exists for the label equation.
+
+⸻
+
+7. Transcript, Signature, and Proof Object
+
+7.1 Canonical transcript to sign
+
+msg = H("obex.partrec", [
+  LE(OBEX_ALPHA_I_VERSION,4),
+  pk_ed25519,           // 32
+  vrf_pk,               // 32
+  LE(slot,8),
+  y_edge_{s-1},         // 32
+  alpha,                // 32 (as defined in §6.1)
+	vrf_y,                // 64 (RFC output)
+  root                  // 32
+])
+
+sig = Sign_Ed25519(sk_ed25519, msg)  // 64 bytes canonical
+
+7.2 Canonical proof object (ObexPartRec)
+
+ObexPartRec {
+  version      : u32           // == OBEX_ALPHA_I_VERSION
+  slot         : u64
+  pk_ed25519   : [u8; 32]
+  vrf_pk       : [u8; 32]
+  y_edge_prev  : Hash256       // == y_edge_{s-1}
+  alpha        : Hash256       // H("obex.alpha", [...]) (32)
+	vrf_y        : [u8; 64]      // RFC 9381 output
+  vrf_pi       : [u8; 80]      // RFC 9381 canonical proof bytes
+  seed         : Hash256       // == H("obex.seed", [y_edge_prev, pk_ed25519, vrf_y])
+  root         : Hash256       // Merkle root over labels
+
+  challenges   : Vec<Challenge>  // length-prefixed LE(4); len == CHALLENGES_Q
+
+  sig          : [u8; 64]      // Ed25519 over msg
+}
+
+Each Challenge (canonical order of fields):
+
+Challenge {
+  idx   : u64          // LE(8) == i_t
+  li    : [u8; 32]     // L[i]
+  pi    : Vec<Hash256> // LE(4) len; Merkle path for index i (leaf→root)
+
+  lim1  : [u8; 32]     // L[i-1]
+  pim1  : Vec<Hash256> // path for (i-1)
+
+  lj    : [u8; 32]     // L[J(i, p_last)]
+  pj    : Vec<Hash256>
+
+  lk    : [u8; 32]     // L[K(i, p_last)]
+  pk_   : Vec<Hash256> // named 'pk_' to avoid colliding with pk_ed25519
+}
+
+Serialization (normative): Exactly the field order above.
+All variable-length vectors are encoded as LE(len,4) || concatenated elements.
+The serialized byte length of ObexPartRec MUST NOT exceed MAX_PARTREC_SIZE. Enforce this before expensive verification.
+
+⸻
+
+8. Participation Set and Commitment
+
+Deduplication & sort:
+	•	Accept at most one valid ObexPartRec per (slot, pk_ed25519) (first valid wins; later ones ignored).
+	•	Sort accepted pk ascending (raw 32-byte lexicographic order).
+
+Leaf payload and root:
+
+part_leaf(pk)  = H("obex.part.leaf",[]) || pk
+part_root_s    = MerkleRoot( leaves = [ part_leaf(pk) for pk in P_s ] )
+
+Only P_s and part_root_s are exposed to other engines.
+
+⸻
+
+9. Verifier Algorithm (Deterministic Equality Checks)
+
+To validate a received ObexPartRec r for target slot s:
+	1.	Structure & size checks
+	•	r.version == OBEX_ALPHA_I_VERSION
+	•	r.slot == s
+	•	|r| ≤ MAX_PARTREC_SIZE
+	•	len(r.challenges) == CHALLENGES_Q
+	2.	VRF verification
+	•	Recompute alpha = H("obex.alpha", [parent_id, LE(s,8), r.y_edge_prev, r.vrf_pk])
+	•	Verify ECVRF.Verify(r.vrf_pk, alpha, r.vrf_pi) → vrf_y_check
+	•	If using 32-byte rehash: vrf_y_expected = H("obex.vrfy",[vrf_y_check]); else compare 64 bytes.
+	•	Reject if r.vrf_y != vrf_y_expected.
+	3.	Seed equality
+	•	seed_expected = H("obex.seed", [ r.y_edge_prev, r.pk_ed25519, r.vrf_y ])
+	•	Reject if r.seed != seed_expected.
+	4.	Transcript signature
+	•	Rebuild msg = H("obex.partrec", [...]) as in §7.1 using the values inside r.
+	•	Verify Ed25519.Verify(r.pk_ed25519, msg, r.sig) == true.
+	5.	Per-challenge checks (last pass p_last = PASSES − 1)
+For each t in 0..Q−1 with ch = r.challenges[t]:
+	•	i_expected = 1 + ( U64LE( H("obex.chal",[ r.y_edge_prev, r.root, r.vrf_y, LE(t,4) ])[0..8] ) % (N_LABELS − 1) )
+	•	Reject if ch.idx != i_expected.
+	•	Compute j = J(i_expected, p_last) and k = K(i_expected, p_last) using r.seed and §4 definitions; require 1 ≤ i_expected < N, j < i_expected, k < i_expected.
+	•	Verify Merkle paths under r.root for:
+	•	ch.li at index i_expected,
+	•	ch.lim1 at index i_expected − 1,
+	•	ch.lj at index j,
+	•	ch.lk at index k.
+	•	Recompute the last-pass label equation:
+
+li_check = H("obex.lbl", [ r.seed, LE(i_expected,8), ch.lim1, ch.lj, ch.lk ])
+
+Reject if li_check != ch.li.
+
+	6.	Accept
+	•	If all checks pass, accept one submission for (s, r.pk_ed25519).
+
+All equality and 32-byte hash comparisons MUST use constant-time comparisons.
+
+⸻
+
+10. Rust-Ready Module (Consensus-Critical Pseudocode)
+
+Replace cryptographic stubs with real libraries: SHA3-256, Ed25519 (canonical), ECVRF (RFC 9381). Do not alter encodings, tags, or order.
+
+// ========================== obex_alpha_i.rs ===========================
+// obex.α I — Participation Engine (VRF-salted, RAM-hard, byte-precise)
+// =====================================================================
+
+#![allow(unused)]
+use alloc::vec::Vec;
+use alloc::collections::{BTreeSet};
+
+// ——— Types ———————————————————————————————————————————————————————
+pub type Hash256 = [u8; 32];
+pub type PK      = [u8; 32]; // Ed25519 public key
+pub type VRFPK   = [u8; 32];
+pub type Sig     = [u8; 64]; // Ed25519 canonical signature
+
+// ——— Integer encodings ——————————————————————————————————————————
+#[inline]
+pub fn le_bytes<const W: usize>(mut x: u128) -> [u8; W] {
+    let mut out = [0u8; W];
+    for i in 0..W { out[i] = (x & 0xFF) as u8; x >>= 8; }
+    out
+}
+
+pub fn u64_from_le(b: &[u8]) -> u64 {
+    let mut x: u64 = 0;
+    for (i, &bi) in b.iter().take(8).enumerate() { x |= (bi as u64) << (8*i); }
+    x
+}
+
+// ——— Hashing (domain-tagged SHA3-256; length-framed) ————————
+pub fn sha3_256(_input: &[u8]) -> Hash256 { unimplemented!() }
+
+pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(tag.as_bytes());
+    for p in parts {
+        buf.extend_from_slice(&le_bytes::<8>(p.len() as u128));
+        buf.extend_from_slice(p);
+    }
+    sha3_256(&buf)
+}
+
+// ——— Merkle (binary; duplicate last when odd) ——————————————
+#[inline] pub fn merkle_leaf(payload: &[u8]) -> Hash256 { h_tag("obex.merkle.leaf", &[payload]) }
+
+#[inline]
+pub fn merkle_node(l: &Hash256, r: &Hash256) -> Hash256 {
+    let mut cat = [0u8; 64];
+    cat[..32].copy_from_slice(l);
+    cat[32..].copy_from_slice(r);
+    h_tag("obex.merkle.node", &[&cat])
+}
+
+pub fn merkle_root(leaves_payload: &[Vec<u8>]) -> Hash256 {
+    if leaves_payload.is_empty() { return h_tag("obex.merkle.empty", &[]); }
+    let mut level: Vec<Hash256> = leaves_payload.iter().map(|p| merkle_leaf(p)).collect();
+    while level.len() > 1 {
+        if level.len() % 2 == 1 { level.push(*level.last().unwrap()); }
+        let mut next = Vec::with_capacity(level.len()/2);
+        for i in (0..level.len()).step_by(2) { next.push(merkle_node(&level[i], &level[i+1])); }
+        level = next;
+    }
+    level[0]
+}
+
+pub struct MerklePath { pub siblings: Vec<Hash256>, pub index: u64 }
+
+pub fn merkle_verify_leaf(root: &Hash256, leaf_payload: &[u8], path: &MerklePath) -> bool {
+    let mut h = merkle_leaf(leaf_payload);
+    let mut idx = path.index;
+    for sib in &path.siblings {
+        if idx & 1 == 0 { h = merkle_node(&h, sib); } else { h = merkle_node(sib, &h); }
+        idx >>= 1;
+    }
+    &h == root
+}
+
+// ——— Crypto stubs ——————————————————————————————————————————————
+// Replace with real Ed25519 and ECVRF (RFC 9381).
+pub fn verify_sig(_pk: &PK, _msg: &Hash256, _sig: &Sig) -> bool { unimplemented!() }
+pub fn ecvrf_verify(_vrf_pk: &VRFPK, _alpha: &Hash256, _vrf_pi: &[u8]) -> Option<Vec<u8>> {
+    // Return Some(vrf_y_bytes) on success (RFC 9381 output), else None.
+    unimplemented!()
+}
+
+// ——— Constants ———————————————————————————————————————————————
+pub const OBEX_ALPHA_I_VERSION: u32 = 1;
+pub const MEM_MIB: usize       = 512;
+pub const LABEL_BYTES: usize   = 32;
+pub const N_LABELS: usize      = (MEM_MIB * 1024 * 1024) / LABEL_BYTES; // 16,777,216
+pub const PASSES: u32          = 3;
+pub const CHALLENGES_Q: usize  = 96;
+pub const MAX_PARTREC_SIZE: usize = 600_000;
+
+// ——— Seed, indices, label update ————————————————————————————
+#[inline] pub fn obex_alpha(parent_id: &Hash256, slot: u64, y_prev: &Hash256, vrf_pk: &VRFPK) -> Hash256 {
+    h_tag("obex.alpha", &[parent_id, &le_bytes::<8>(slot as u128), y_prev, vrf_pk])
+}
+#[inline] pub fn obex_seed(y_prev: &Hash256, pk: &PK, vrf_y: &[u8]) -> Hash256 {
+    h_tag("obex.seed", &[y_prev, pk, vrf_y])
+}
+#[inline] fn lbl0(seed: &Hash256) -> Hash256 { h_tag("obex.l0", &[seed]) }
+
+#[inline]
+fn idx_j(seed: &Hash256, i: u64, p: u32) -> u64 {
+    let b = h_tag("obex.idx", &[seed, &le_bytes::<8>(i as u128), &le_bytes::<4>(p as u128), &[0x00]]);
+    if i == 0 { 0 } else { u64_from_le(&b[..8]) % i }
+}
+#[inline]
+fn idx_k(seed: &Hash256, i: u64, p: u32) -> u64 {
+    let b = h_tag("obex.idx", &[seed, &le_bytes::<8>(i as u128), &le_bytes::<4>(p as u128), &[0x01]]);
+    if i == 0 { 0 } else { u64_from_le(&b[..8]) % i }
+}
+
+#[inline]
+fn label_update(seed: &Hash256, i: u64, l_im1: &Hash256, l_j: &Hash256, l_k: &Hash256) -> Hash256 {
+    h_tag("obex.lbl", &[seed, &le_bytes::<8>(i as u128), l_im1, l_j, l_k])
+}
+
+// ——— Prover array fill ———————————————————————————————————————
+pub struct ProverArray { pub labels: Vec<Hash256> }
+
+impl ProverArray {
+    pub fn fill(seed: &Hash256) -> Self {
+        let mut labels = Vec::with_capacity(N_LABELS);
+        labels.push(lbl0(seed));
+        // pass 0
+        for i in 1..N_LABELS {
+            let j = idx_j(seed, i as u64, 0) as usize;
+            let k = idx_k(seed, i as u64, 0) as usize;
+            labels.push(label_update(seed, i as u64, &labels[i-1], &labels[j], &labels[k]));
+        }
+        // passes 1..PASSES-1
+        for p in 1..PASSES {
+            for i in 1..N_LABELS {
+                let j = idx_j(seed, i as u64, p) as usize;
+                let k = idx_k(seed, i as u64, p) as usize;
+                labels[i] = label_update(seed, i as u64, &labels[i-1], &labels[j], &labels[k]);
+            }
+        }
+        Self { labels }
+    }
+    pub fn merkle_root(&self) -> Hash256 {
+        let mut payloads = Vec::with_capacity(N_LABELS);
+        for l in &self.labels { payloads.push(l.to_vec()); }
+        merkle_root(&payloads)
+    }
+}
+
+// ——— Challenge index ————————————————————————————————————————
+fn chal_index(y_prev: &Hash256, root: &Hash256, vrf_y: &[u8], t: u32) -> u64 {
+    let b = h_tag("obex.chal", &[y_prev, root, vrf_y, &le_bytes::<4>(t as u128)]);
+    1 + (u64_from_le(&b[..8]) % ((N_LABELS as u64) - 1))
+}
+
+// ——— Transcript hash ————————————————————————————————————————
+fn partrec_msg(
+    version: u32, slot: u64, pk: &PK, vrf_pk: &VRFPK,
+    y_prev: &Hash256, alpha: &Hash256, vrf_y: &[u8], root: &Hash256
+) -> Hash256 {
+    h_tag("obex.partrec", &[
+        &le_bytes::<4>(version as u128),
+        pk, vrf_pk, &le_bytes::<8>(slot as u128),
+        y_prev, alpha, vrf_y, root
+    ])
+}
+
+// ——— Canonical types ————————————————————————————————————————
+#[derive(Clone)]
+pub struct MerklePathLite { pub siblings: Vec<Hash256> } // index supplied alongside
+
+#[derive(Clone)]
+pub struct ChallengeOpen {
+    pub idx:  u64,
+    pub li:   Hash256,
+    pub pi:   MerklePathLite,
+
+    pub lim1: Hash256,
+    pub pim1: MerklePathLite,
+
+    pub lj:   Hash256,
+    pub pj:   MerklePathLite,
+
+    pub lk:   Hash256,
+    pub pk_:  MerklePathLite,
+}
+
+pub struct ObexPartRec {
+    pub version: u32,
+    pub slot:    u64,
+    pub pk_ed25519: PK,
+    pub vrf_pk:     VRFPK,
+    pub y_edge_prev: Hash256,
+    pub alpha:   Hash256,
+    pub vrf_y:   Vec<u8>,   // 64 or 32 bytes (network-wide fixed)
+    pub vrf_pi:  Vec<u8>,   // RFC 9381
+    pub seed:    Hash256,
+    pub root:    Hash256,
+    pub challenges: Vec<ChallengeOpen>, // len == CHALLENGES_Q
+    pub sig:     Sig,
+}
+
+// ——— Verify function ————————————————————————————————————————
+pub fn obex_verify_partrec(
+    rec: &ObexPartRec,
+    slot: u64,
+    parent_id: &Hash256,
+) -> bool {
+    if rec.version != OBEX_ALPHA_I_VERSION { return false; }
+    if rec.slot != slot { return false; }
+    if rec.challenges.len() != CHALLENGES_Q { return false; }
+
+    // 1) VRF
+    let alpha = obex_alpha(parent_id, slot, &rec.y_edge_prev, &rec.vrf_pk);
+    if alpha != rec.alpha { return false; }
+    let vrf_y_check = match ecvrf_verify(&rec.vrf_pk, &alpha, &rec.vrf_pi) { Some(y) => y, None => return false };
+    if vrf_y_check.as_slice() != rec.vrf_y.as_slice() { return false; } // or compare to H("obex.vrfy",[...]) if 32-byte mode
+
+    // 2) Seed
+    let seed_expected = obex_seed(&rec.y_edge_prev, &rec.pk_ed25519, &rec.vrf_y);
+    if seed_expected != rec.seed { return false; }
+
+    // 3) Signature
+    let msg = partrec_msg(rec.version, rec.slot, &rec.pk_ed25519, &rec.vrf_pk,
+                          &rec.y_edge_prev, &rec.alpha, &rec.vrf_y, &rec.root);
+    if !verify_sig(&rec.pk_ed25519, &msg, &rec.sig) { return false; }
+
+    // 4) Challenges
+    let last_pass = PASSES - 1;
+    for (t, ch) in rec.challenges.iter().enumerate() {
+        let i = chal_index(&rec.y_edge_prev, &rec.root, &rec.vrf_y, t as u32);
+        if ch.idx != i { return false; }
+        if !(i > 0 && (i as usize) < N_LABELS) { return false; }
+
+        let j = idx_j(&rec.seed, i, last_pass);
+        let k = idx_k(&rec.seed, i, last_pass);
+        if !(j < i && k < i) { return false; }
+
+        // Merkle paths
+        if !merkle_verify_leaf(&rec.root, &ch.li,   &MerklePath { siblings: ch.pi.siblings.clone(),   index: i }) { return false; }
+        if !merkle_verify_leaf(&rec.root, &ch.lim1, &MerklePath { siblings: ch.pim1.siblings.clone(), index: i-1 }) { return false; }
+        if !merkle_verify_leaf(&rec.root, &ch.lj,   &MerklePath { siblings: ch.pj.siblings.clone(),   index: j }) { return false; }
+        if !merkle_verify_leaf(&rec.root, &ch.lk,   &MerklePath { siblings: ch.pk_.siblings.clone(),  index: k }) { return false; }
+
+        // Label equation
+        let li_check = label_update(&rec.seed, i, &ch.lim1, &ch.lj, &ch.lk);
+        if li_check != ch.li { return false; }
+    }
+    true
+}
+
+// ——— Participation set & commitment ————————————————————————
+pub fn build_participation_set<'a>(
+    slot: u64,
+    parent_id: &Hash256,
+    submissions: impl Iterator<Item=&'a ObexPartRec>
+) -> (Vec<PK>, Hash256) {
+    let mut seen: BTreeSet<PK> = BTreeSet::new();
+    let mut pks: Vec<PK> = Vec::new();
+
+    for rec in submissions {
+        if rec.slot != slot { continue; }
+        if seen.contains(&rec.pk_ed25519) { continue; }
+        if obex_verify_partrec(rec, slot, parent_id) {
+            seen.insert(rec.pk_ed25519);
+            pks.push(rec.pk_ed25519);
+        }
+    }
+    pks.sort(); // lexicographic
+
+    // part_root = Merkle over H("obex.part.leaf",[]) || pk
+    let leaves: Vec<Vec<u8>> = pks.iter().map(|pk| {
+        let mut b = Vec::with_capacity(32+32);
+        b.extend_from_slice(&h_tag("obex.part.leaf", &[]));
+        b.extend_from_slice(pk);
+        b
+    }).collect();
+    let part_root = merkle_root(&leaves);
+
+    (pks, part_root)
+}
+
+
+⸻
+
+11. Resource Profile (Reference)
+	•	Prover: ≈6 GiB RAM traffic (3 passes) with MEM_MIB=512, contiguous 512 MiB for labels plus overhead for Merkle path extraction.
+	•	Verifier: Q × (4 × log2(N)) Merkle nodes + constant label checks. For Q=96, N=2^24, ~9,216 node hashes → within 0–100 ms on commodity hardware with optimized SHA3.
+	•	Network: Typical ObexPartRec ≈300 KiB; enforce MAX_PARTREC_SIZE early.
+
+⸻
+
+12. Implementation Guidance (Consensus-Safety)
+	•	Hashing: Use vetted SHA3-256; do not deviate from tag strings or length framing.
+	•	ECVRF: RFC 9381, canonical proof bytes; fail-closed on any ambiguity.
+	•	Signatures: Ed25519 with unique encoding (no DER); constant-time verification.
+	•	Merkle paths: Binary; duplicate last when odd; constant-time hash compares.
+	•	Streaming: Production provers SHOULD avoid building full trees; retain minimal nodes for paths or use streaming-level construction.
+	•	DoS: Enforce MAX_PARTREC_SIZE and CHALLENGES_Q exactly; ignore later submissions per (slot, pk) after first valid.
+
+⸻
+
+13. Conformance Checklist (Engineer-Facing)
+	•	Integers are LE fixed-width (u32, u64), vector lengths LE(4).
+	•	Tags exactly as listed (§3).
+	•	VRF input alpha = H("obex.alpha",[parent_id, LE(slot,8), y_edge_{s-1}, vrf_pk]).
+	•	VRF proof verifies; vrf_y matches canonical form (64 bytes).
+	•	Seed H("obex.seed",[y_edge_{s-1}, pk_ed25519, vrf_y]).
+	•	Labels per §4 with PASSES=3, DEPS=2.
+	•	Merkle over raw 32-byte labels; binary; duplicate last; empty root tag.
+	•	Challenges i_t from H("obex.chal",[y_prev, root, vrf_y, LE(t,4)]), t=0..Q−1, indices in [1..N−1].
+	•	Proof object field order & lengths exact; serialized length ≤ MAX_PARTREC_SIZE.
+	•	Signature over H("obex.partrec",[…]) with Ed25519 canonical encoding.
+	•	Participation: one valid submission per (slot, pk); P_s sorted; part_root_s Merkle over H("obex.part.leaf",[]) || pk.
+
+⸻
+
+14. Test Vectors (Ship with Implementations)
+	1.	Nominal round-trip
+	•	Inputs: fixed parent_id, y_edge_{s-1}, slot, pk_ed25519/vrf_pk with fixed keys.
+	•	Outputs: alpha, vrf_y, seed_s, first 16 labels, root, all i_t, serialized ObexPartRec bytes, P_s, part_root_s.
+	2.	VRF tamper
+	•	Modify 1 bit in vrf_pi → VRF verify fails.
+	3.	Challenge corruption
+	•	Flip one byte of li in a challenge → label equality fails.
+	4.	Merkle path tamper
+	•	Replace a sibling hash → Merkle verification fails.
+	5.	Duplicate submission
+	•	Two proofs for same (slot, pk); only first valid is accepted.
+	6.	Oversize proof
+	•	Serialized ObexPartRec > MAX_PARTREC_SIZE → reject before crypto.
+
+⸻
+
+15. Public API Summary
+	•	Prover (reference):
+ProverArray::fill(seed: &Hash256) -> ProverArray
+(non-consensus guidance for label/commit generation)
+	•	Verifier (per proof):
+obex_verify_partrec(rec: &ObexPartRec, slot: u64, parent_id: &Hash256) -> bool
+	•	Builder (per slot):
+build_participation_set(slot: u64, parent_id: &Hash256, submissions: impl Iterator<Item=&ObexPartRec>) -> (Vec<PK>, Hash256)
+
+These are sufficient to integrate obex.α I with the node’s pipeline and with obex.α II/obex.α T.
+
+⸻
+
+This obex.α I blueprint is complete and byte-precise.
+It specifies exact encodings, deterministic algorithms, and a production-ready Rust-style module. Independent implementations that adhere to this document will agree bit-for-bit on participation validity, P_s, and part_root_s for every slot.
