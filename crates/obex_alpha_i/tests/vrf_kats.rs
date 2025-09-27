@@ -13,7 +13,4 @@ fn vrf_kat_lengths_and_rejects() {
     assert!(vrf::verify(&pk, &alpha, &pi).is_err());
 }
 
-
 // (RFC 9381 vector tests can be added by adapting crate API; kept minimal here.)
-
-

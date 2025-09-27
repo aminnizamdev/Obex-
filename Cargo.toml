@@ -5,6 +5,7 @@ members = [
     "crates/obex_alpha_ii",
     "crates/obex_alpha_iii",
     "crates/obex_alpha_t",
+    "crates/e2e",
 ]
 resolver = "2"
 
@@ -12,6 +13,8 @@ resolver = "2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Obex Labs <engineering@obex.example>"]
-version = "0.1.0"
+version = "1.0.0"
+
+[workspace.dependencies]
 
 

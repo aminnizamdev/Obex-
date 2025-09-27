@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use obex_alpha_i::{encode_partrec, ChallengeOpen, MerklePathLite, ObexPartRec, OBEX_ALPHA_I_VERSION, CHALLENGES_Q};
+use obex_alpha_i::{
+    encode_partrec, ChallengeOpen, MerklePathLite, ObexPartRec, CHALLENGES_Q, OBEX_ALPHA_I_VERSION,
+};
 use obex_primitives::{constants, h_tag, le_bytes, Hash256, Pk32};
 
 fn main() {
@@ -12,7 +14,15 @@ fn main() {
     let vrf_y: Vec<u8> = vec![5u8; 64];
     let parent_id = constants::GENESIS_PARENT_ID;
     let slot = 1u64;
-    let alpha: Hash256 = h_tag(constants::TAG_ALPHA, &[&parent_id, &le_bytes::<8>(u128::from(slot)), &y_prev, &vrf_pk]);
+    let alpha: Hash256 = h_tag(
+        constants::TAG_ALPHA,
+        &[
+            &parent_id,
+            &le_bytes::<8>(u128::from(slot)),
+            &y_prev,
+            &vrf_pk,
+        ],
+    );
     let seed: Hash256 = h_tag(constants::TAG_SEED, &[&y_prev, &pk, &vrf_y]);
     let root: Hash256 = h_tag(constants::TAG_MERKLE_EMPTY, &[]);
 
@@ -48,11 +58,11 @@ fn main() {
 
     let bytes = encode_partrec(&rec).expect("encode");
 
-    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden");
+    let out_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden");
     fs::create_dir_all(&out_dir).expect("mkdir -p tests/golden");
     let out_path = out_dir.join("partrec_v1.bin");
     fs::write(&out_path, &bytes).expect("write golden partrec");
     println!("WROTE:{}", out_path.display());
 }
-
-

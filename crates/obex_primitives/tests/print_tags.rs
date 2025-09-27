@@ -1,5 +1,5 @@
-use obex_primitives::{constants, h_tag};
 use hex::ToHex;
+use obex_primitives::{constants, h_tag};
 
 #[test]
 fn print_tag_hex() {
@@ -31,7 +31,7 @@ fn print_tag_hex() {
         constants::TAG_REWARD_DRAW,
         constants::TAG_REWARD_RANK,
     ];
-    for t in tags { println!("{}:{}", t, h_tag(t, &[]).encode_hex::<String>()); }
+    for t in tags {
+        println!("{}:{}", t, h_tag(t, &[]).encode_hex::<String>());
+    }
 }
-
-

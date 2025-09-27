@@ -25,12 +25,12 @@ extern crate alloc;
 // - Binary Merkle (duplicate last when odd) and leaf verification
 // - Constant-time equality helpers for 32-byte digests
 
-use sha3::{Digest, Sha3_256};
-use subtle::ConstantTimeEq;
-#[cfg(feature = "std")]
-use std::vec::Vec;
 #[cfg(all(not(feature = "std"), feature = "alloc"))]
 use alloc::vec::Vec;
+use sha3::{Digest, Sha3_256};
+#[cfg(feature = "std")]
+use std::vec::Vec;
+use subtle::ConstantTimeEq;
 
 /// 32-byte hash (SHA3-256 output).
 pub type Hash256 = [u8; 32];
@@ -42,6 +42,7 @@ pub type Pk32 = [u8; 32];
 pub type Sig64 = [u8; 64];
 
 pub mod constants;
+pub mod consensus;
 
 /// Convert an unsigned integer to fixed-width little-endian bytes.
 ///
@@ -74,6 +75,11 @@ pub fn u64_from_le(b: &[u8]) -> u64 {
 /// `H(tag_ascii, parts[])` = `SHA3_256`( UTF8(tag) || Σ ( LE(|p|,8) || p ) )
 #[must_use]
 pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
+    // Assert that consensus tags are all within the `obex.` namespace in debug builds.
+    debug_assert!(
+        tag.starts_with("obex."),
+        "non-obex.* tag used in consensus hashing: {tag}"
+    );
     let mut hasher = Sha3_256::new();
     hasher.update(tag.as_bytes());
     for p in parts {
@@ -87,9 +93,92 @@ pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
     out
 }
 
+#[cfg(test)]
+mod tag_asserts {
+    use super::*;
+
+    #[test]
+    fn all_public_tag_constants_are_obex_namespaced() {
+        let tags = [
+            constants::TAG_MERKLE_LEAF,
+            constants::TAG_MERKLE_NODE,
+            constants::TAG_MERKLE_EMPTY,
+            constants::TAG_ALPHA,
+            constants::TAG_SEED,
+            constants::TAG_L0,
+            constants::TAG_LBL,
+            constants::TAG_IDX,
+            constants::TAG_CHAL,
+            constants::TAG_PART_LEAF,
+            constants::TAG_PARTREC,
+            constants::TAG_VRFY,
+            constants::TAG_HEADER_ID,
+            constants::TAG_SLOT_SEED,
+            constants::TAG_VDF_YCORE,
+            constants::TAG_VDF_EDGE,
+            constants::TAG_TX_ACCESS,
+            constants::TAG_TX_BODY_V1,
+            constants::TAG_TX_ID,
+            constants::TAG_TX_COMMIT,
+            constants::TAG_TX_SIG,
+            constants::TAG_TXID_LEAF,
+            constants::TAG_TICKET_ID,
+            constants::TAG_TICKET_LEAF,
+            constants::TAG_SYS_TX,
+            constants::TAG_REWARD_DRAW,
+            constants::TAG_REWARD_RANK,
+        ];
+        for t in tags {
+            assert!(t.starts_with("obex."), "tag not obex.*: {t}");
+        }
+    }
+
+    #[test]
+    fn tag_constants_match_expected_ascii() {
+        let checks: &[(&str, &[u8])] = &[
+            (constants::TAG_MERKLE_LEAF, b"obex.merkle.leaf"),
+            (constants::TAG_MERKLE_NODE, b"obex.merkle.node"),
+            (constants::TAG_MERKLE_EMPTY, b"obex.merkle.empty"),
+            (constants::TAG_ALPHA, b"obex.alpha"),
+            (constants::TAG_SEED, b"obex.seed"),
+            (constants::TAG_L0, b"obex.l0"),
+            (constants::TAG_LBL, b"obex.lbl"),
+            (constants::TAG_IDX, b"obex.idx"),
+            (constants::TAG_CHAL, b"obex.chal"),
+            (constants::TAG_PART_LEAF, b"obex.part.leaf"),
+            (constants::TAG_PARTREC, b"obex.partrec"),
+            (constants::TAG_VRFY, b"obex.vrfy"),
+            (constants::TAG_HEADER_ID, b"obex.header.id"),
+            (constants::TAG_SLOT_SEED, b"obex.slot.seed"),
+            (constants::TAG_VDF_YCORE, b"obex.vdf.ycore"),
+            (constants::TAG_VDF_EDGE, b"obex.vdf.edge"),
+            (constants::TAG_TX_ACCESS, b"obex.tx.access"),
+            (constants::TAG_TX_BODY_V1, b"obex.tx.body.v1"),
+            (constants::TAG_TX_ID, b"obex.tx.id"),
+            (constants::TAG_TX_COMMIT, b"obex.tx.commit"),
+            (constants::TAG_TX_SIG, b"obex.tx.sig"),
+            (constants::TAG_TXID_LEAF, b"obex.txid.leaf"),
+            (constants::TAG_TICKET_ID, b"obex.ticket.id"),
+            (constants::TAG_TICKET_LEAF, b"obex.ticket.leaf"),
+            (constants::TAG_SYS_TX, b"obex.sys.tx"),
+            (constants::TAG_REWARD_DRAW, b"obex.reward.draw"),
+            (constants::TAG_REWARD_RANK, b"obex.reward.rank"),
+        ];
+        for (actual, expected) in checks {
+            assert_eq!(
+                (*actual).as_bytes(),
+                *expected,
+                "tag ASCII mismatch: {actual}"
+            );
+        }
+    }
+}
+
 /// Compute the Merkle leaf hash of a payload using the shared leaf domain tag.
 #[must_use]
-pub fn merkle_leaf(payload: &[u8]) -> Hash256 { h_tag(constants::TAG_MERKLE_LEAF, &[payload]) }
+pub fn merkle_leaf(payload: &[u8]) -> Hash256 {
+    h_tag(constants::TAG_MERKLE_LEAF, &[payload])
+}
 
 /// Compute the Merkle node hash from two child node hashes using the shared node domain tag.
 #[must_use]
@@ -110,7 +199,9 @@ pub fn merkle_root(leaves_payload: &[Vec<u8>]) -> Hash256 {
     let mut level: Vec<Hash256> = leaves_payload.iter().map(|p| merkle_leaf(p)).collect();
     while level.len() > 1 {
         if level.len() % 2 == 1 {
-            if let Some(last) = level.last().copied() { level.push(last); }
+            if let Some(last) = level.last().copied() {
+                level.push(last);
+            }
         }
         let mut next: Vec<Hash256> = Vec::with_capacity(level.len() / 2);
         let mut i = 0usize;
@@ -139,7 +230,11 @@ pub fn merkle_verify_leaf(root: &Hash256, leaf_payload: &[u8], path: &MerklePath
     let mut h = merkle_leaf(leaf_payload);
     let mut idx = path.index;
     for sib in &path.siblings {
-        h = if idx & 1 == 0 { merkle_node(&h, sib) } else { merkle_node(sib, &h) };
+        h = if idx & 1 == 0 {
+            merkle_node(&h, sib)
+        } else {
+            merkle_node(sib, &h)
+        };
         idx >>= 1;
     }
     ct_eq_hash(root, &h)
@@ -147,7 +242,9 @@ pub fn merkle_verify_leaf(root: &Hash256, leaf_payload: &[u8], path: &MerklePath
 
 /// Constant-time equality for two 32-byte hashes.
 #[must_use]
-pub fn ct_eq_hash(a: &Hash256, b: &Hash256) -> bool { a.ct_eq(b).into() }
+pub fn ct_eq_hash(a: &Hash256, b: &Hash256) -> bool {
+    a.ct_eq(b).into()
+}
 
 #[cfg(test)]
 #[allow(
@@ -178,5 +275,3 @@ mod tests {
         assert!(!ct_eq_hash(&root, &root_swapped));
     }
 }
-
-

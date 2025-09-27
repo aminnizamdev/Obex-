@@ -158,6 +158,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "e2e"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "obex_alpha_i",
+ "obex_alpha_ii",
+ "obex_alpha_iii",
+ "obex_alpha_t",
+ "obex_primitives",
+]
+
+[[package]]
 name = "ed25519"
 version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

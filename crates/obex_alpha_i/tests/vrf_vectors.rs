@@ -22,4 +22,3 @@ fn vrf_rejects_random_pi() {
     // Random proof should fail verification under TAI
     assert!(vrf::verify(&pk, &alpha, &pi).is_err());
 }
-

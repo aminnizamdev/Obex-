@@ -7,6 +7,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features: ["", "--features ecvrf_rfc9381"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
@@ -19,5 +22,47 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic -D clippy::nursery -D clippy::cargo | cat
       - name: test
-        run: cargo test --all --all-targets | cat
+        run: cargo test --all --all-targets ${{ matrix.features }} | cat
+      - name: golden tests gate
+        run: |
+          set -e
+          echo "Running golden tests gate..."
+          # α-I golden tests
+          cargo test --package obex_alpha_i golden_partrec_accept_and_roundtrip ${{ matrix.features }} | cat
+          cargo test --package obex_alpha_i golden_partrec_flipbit_precise_errors ${{ matrix.features }} | cat
+          # α-II golden tests  
+          cargo test --package obex_alpha_ii golden_header_parent_and_child_roundtrip | cat
+          cargo test --package obex_alpha_ii golden_header_child_id_matches_hex | cat
+          cargo test --package obex_alpha_ii golden_header_flipbit_changes_id_or_decode | cat
+          cargo test --package obex_alpha_ii golden_header_field_flip_specific_errors | cat
+          echo "Golden tests gate passed!"
+      - name: vrf feature tests
+        if: matrix.features != ''
+        run: |
+          set -e
+          echo "Running VRF-specific tests..."
+          # RFC-9381 TAI vectors tests with VRF feature
+          cargo test --package obex_alpha_i rfc9381_tai_valid ${{ matrix.features }} | cat
+          cargo test --package obex_alpha_i rfc9381_tai_invalid ${{ matrix.features }} | cat
+          cargo test --package obex_alpha_i rfc9381_tai_len ${{ matrix.features }} | cat
+          echo "VRF feature tests passed!"
+      - name: forbidden tags scan
+        run: |
+          set -e
+          if rg -n "BLAKE3" crates --glob '!**/target/**' ; then echo "Forbidden algorithm BLAKE3 found in workspace"; exit 1; fi
+          if rg -n "[^A-Za-z0-9_]TAG_[A-Z_]+\s*=\s*\"(?!obex\.)" crates --glob '!**/target/**' ; then echo "Non-obex.* tag detected in consensus constants"; exit 1; fi
+      - name: tag guard
+        run: |
+          set -e
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid tag format: $TAG_NAME. Must be vX.Y.Z"
+              exit 1
+            fi
+            if [[ "$GITHUB_REF_NAME" != "main" ]] && [[ "$GITHUB_BASE_REF" != "main" ]]; then
+              echo "Tags can only be created from main branch"
+              exit 1
+            fi
+          fi
 

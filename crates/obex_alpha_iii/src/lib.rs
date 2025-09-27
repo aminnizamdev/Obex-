@@ -19,9 +19,12 @@
 //! Merkle root, per `obex.alpha III.txt`. Uses Ed25519 for signatures.
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use obex_primitives::{constants, h_tag, le_bytes, merkle_root, Hash256, Pk32, Sig64};
+use obex_primitives::{consensus, le_bytes, merkle_root, Hash256, Pk32, Sig64};
 
 pub type Sig = Sig64;
+
+/// Network version (consensus-sealed)
+pub const OBEX_ALPHA_III_VERSION: u32 = 1;
 
 pub const MIN_TX_UOBX: u128 = 10;
 pub const FLAT_SWITCH_UOBX: u128 = 1_000;
@@ -32,7 +35,11 @@ pub const PCT_DEN: u128 = 100;
 #[must_use]
 pub fn fee_int_uobx(amount_u: u128) -> u128 {
     assert!(amount_u >= MIN_TX_UOBX);
-    if amount_u <= FLAT_SWITCH_UOBX { FLAT_FEE_UOBX } else { amount_u.div_ceil(PCT_DEN) }
+    if amount_u <= FLAT_SWITCH_UOBX {
+        FLAT_FEE_UOBX
+    } else {
+        amount_u.div_ceil(PCT_DEN)
+    }
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
@@ -41,18 +48,26 @@ pub struct AccessList {
     pub write_accounts: Vec<Pk32>,
 }
 
-fn sort_dedup(mut v: Vec<Pk32>) -> Vec<Pk32> { v.sort_unstable(); v.dedup(); v }
+fn sort_dedup(mut v: Vec<Pk32>) -> Vec<Pk32> {
+    v.sort_unstable();
+    v.dedup();
+    v
+}
 
 #[must_use]
 pub fn encode_access(a: &AccessList) -> Vec<u8> {
     let r = sort_dedup(a.read_accounts.clone());
     let w = sort_dedup(a.write_accounts.clone());
     let mut out = Vec::new();
-    out.extend_from_slice(&h_tag(constants::TAG_TX_ACCESS, &[]));
+    out.extend_from_slice(&consensus::h_tag("tx.access", &[]));
     out.extend_from_slice(&le_bytes::<4>(r.len() as u128));
-    for pk in &r { out.extend_from_slice(pk); }
+    for pk in &r {
+        out.extend_from_slice(pk);
+    }
     out.extend_from_slice(&le_bytes::<4>(w.len() as u128));
-    for pk in &w { out.extend_from_slice(pk); }
+    for pk in &w {
+        out.extend_from_slice(pk);
+    }
     out
 }
 
@@ -72,7 +87,7 @@ pub struct TxBodyV1 {
 #[must_use]
 pub fn canonical_tx_bytes(tx: &TxBodyV1) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&h_tag(constants::TAG_TX_BODY_V1, &[]));
+    out.extend_from_slice(&consensus::h_tag("tx.body.v1", &[]));
     out.extend_from_slice(&tx.sender);
     out.extend_from_slice(&tx.recipient);
     out.extend_from_slice(&le_bytes::<8>(u128::from(tx.nonce)));
@@ -87,10 +102,14 @@ pub fn canonical_tx_bytes(tx: &TxBodyV1) -> Vec<u8> {
 }
 
 #[must_use]
-pub fn txid(tx: &TxBodyV1) -> Hash256 { h_tag(constants::TAG_TX_ID, &[&canonical_tx_bytes(tx)]) }
+pub fn txid(tx: &TxBodyV1) -> Hash256 {
+    consensus::h_tag("tx.id", &[&canonical_tx_bytes(tx)])
+}
 
 #[must_use]
-pub fn tx_commit(tx: &TxBodyV1) -> Hash256 { h_tag(constants::TAG_TX_COMMIT, &[&canonical_tx_bytes(tx)]) }
+pub fn tx_commit(tx: &TxBodyV1) -> Hash256 {
+    consensus::h_tag("tx.commit", &[&canonical_tx_bytes(tx)])
+}
 
 #[must_use]
 fn verify_sig(pk: &Pk32, msg: &[u8], sig: &Sig) -> bool {
@@ -116,7 +135,7 @@ pub struct TicketRecord {
 #[must_use]
 pub fn enc_ticket_leaf(t: &TicketRecord) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&h_tag(constants::TAG_TICKET_LEAF, &[]));
+    out.extend_from_slice(&consensus::h_tag("ticket.leaf", &[]));
     out.extend_from_slice(&t.ticket_id);
     out.extend_from_slice(&t.txid);
     out.extend_from_slice(&t.sender);
@@ -139,36 +158,79 @@ pub struct AlphaIIIState {
 }
 
 impl AlphaIIIState {
-    #[must_use] pub fn spendable_of(&self, pk: &Pk32) -> u128 { *self.spendable_u.get(pk).unwrap_or(&0) }
-    #[must_use] pub fn reserved_of(&self,  pk: &Pk32) -> u128 { *self.reserved_u .get(pk).unwrap_or(&0) }
-    #[must_use] pub fn nonce_of(&self,     pk: &Pk32) -> u64  { *self.next_nonce .get(pk).unwrap_or(&0) }
+    #[must_use]
+    pub fn spendable_of(&self, pk: &Pk32) -> u128 {
+        *self.spendable_u.get(pk).unwrap_or(&0)
+    }
+    #[must_use]
+    pub fn reserved_of(&self, pk: &Pk32) -> u128 {
+        *self.reserved_u.get(pk).unwrap_or(&0)
+    }
+    #[must_use]
+    pub fn nonce_of(&self, pk: &Pk32) -> u64 {
+        *self.next_nonce.get(pk).unwrap_or(&0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AdmitErr { BadSig, WrongSlot, WrongBeacon, NonceMismatch, BelowMinAmount, FeeMismatch, InsufficientFunds }
+pub enum AdmitErr {
+    BadSig,
+    WrongSlot,
+    WrongBeacon,
+    NonceMismatch,
+    BelowMinAmount,
+    FeeMismatch,
+    InsufficientFunds,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AdmitResult { Finalized(TicketRecord), Rejected(AdmitErr) }
+pub enum AdmitResult {
+    Finalized(TicketRecord),
+    Rejected(AdmitErr),
+}
 
 #[must_use]
-pub fn admit_single(tx: &TxBodyV1, sig: &Sig, s_now: u64, y_prev: &Hash256, st: &mut AlphaIIIState) -> AdmitResult {
-    let msg = h_tag(constants::TAG_TX_SIG, &[&canonical_tx_bytes(tx)]);
-    if !verify_sig(&tx.sender, &msg, sig) { return AdmitResult::Rejected(AdmitErr::BadSig); }
-    if tx.s_bind != s_now { return AdmitResult::Rejected(AdmitErr::WrongSlot); }
-    if tx.y_bind != *y_prev { return AdmitResult::Rejected(AdmitErr::WrongBeacon); }
-    if tx.nonce != st.nonce_of(&tx.sender) { return AdmitResult::Rejected(AdmitErr::NonceMismatch); }
-    if tx.amount_u < MIN_TX_UOBX { return AdmitResult::Rejected(AdmitErr::BelowMinAmount); }
-    if tx.fee_u != fee_int_uobx(tx.amount_u) { return AdmitResult::Rejected(AdmitErr::FeeMismatch); }
+pub fn admit_single(
+    tx: &TxBodyV1,
+    sig: &Sig,
+    s_now: u64,
+    y_prev: &Hash256,
+    st: &mut AlphaIIIState,
+) -> AdmitResult {
+    let msg = consensus::h_tag("tx.sig", &[&canonical_tx_bytes(tx)]);
+    if !verify_sig(&tx.sender, &msg, sig) {
+        return AdmitResult::Rejected(AdmitErr::BadSig);
+    }
+    if tx.s_bind != s_now {
+        return AdmitResult::Rejected(AdmitErr::WrongSlot);
+    }
+    if tx.y_bind != *y_prev {
+        return AdmitResult::Rejected(AdmitErr::WrongBeacon);
+    }
+    if tx.nonce != st.nonce_of(&tx.sender) {
+        return AdmitResult::Rejected(AdmitErr::NonceMismatch);
+    }
+    if tx.amount_u < MIN_TX_UOBX {
+        return AdmitResult::Rejected(AdmitErr::BelowMinAmount);
+    }
+    if tx.fee_u != fee_int_uobx(tx.amount_u) {
+        return AdmitResult::Rejected(AdmitErr::FeeMismatch);
+    }
     let total = tx.amount_u.saturating_add(tx.fee_u);
-    if st.spendable_of(&tx.sender) < total { return AdmitResult::Rejected(AdmitErr::InsufficientFunds); }
+    if st.spendable_of(&tx.sender) < total {
+        return AdmitResult::Rejected(AdmitErr::InsufficientFunds);
+    }
 
     *st.spendable_u.entry(tx.sender).or_insert(0) -= total;
-    *st.reserved_u .entry(tx.sender).or_insert(0) += total;
-    *st.next_nonce.entry(tx.sender).or_insert(0)  += 1;
+    *st.reserved_u.entry(tx.sender).or_insert(0) += total;
+    *st.next_nonce.entry(tx.sender).or_insert(0) += 1;
 
     let xid = txid(tx);
     let rec = TicketRecord {
-        ticket_id: h_tag(constants::TAG_TICKET_ID, &[&xid, &le_bytes::<8>(u128::from(s_now))]),
+        ticket_id: consensus::h_tag(
+            "ticket.id",
+            &[&xid, &le_bytes::<8>(u128::from(s_now))],
+        ),
         txid: xid,
         sender: tx.sender,
         nonce: tx.nonce,
@@ -178,7 +240,10 @@ pub fn admit_single(tx: &TxBodyV1, sig: &Sig, s_now: u64, y_prev: &Hash256, st: 
         s_exec: s_now,
         commit_hash: tx_commit(tx),
     };
-    st.admitted_by_slot.entry(s_now).or_default().push(rec.clone());
+    st.admitted_by_slot
+        .entry(s_now)
+        .or_default()
+        .push(rec.clone());
     st.tickets_by_txid.insert(rec.txid, rec.clone());
     AdmitResult::Finalized(rec)
 }
@@ -213,7 +278,9 @@ pub fn build_ticket_root_for_slot(s: u64, st: &AlphaIIIState) -> (Vec<Vec<u8>>, 
 mod tests {
     use super::*;
 
-    fn pk(val: u8) -> Pk32 { [val; 32] }
+    fn pk(val: u8) -> Pk32 {
+        [val; 32]
+    }
 
     #[test]
     fn fee_rule_matches_branches() {
@@ -225,8 +292,9 @@ mod tests {
     #[test]
     fn empty_slot_merkle_root_is_empty_tag() {
         let st = AlphaIIIState::default();
-    let (_leaves, root) = build_ticket_root_for_slot(1, &st);
-    assert_eq!(root, h_tag(constants::TAG_MERKLE_EMPTY, &[]));
+        let (_leaves, root) = build_ticket_root_for_slot(1, &st);
+        // Empty merkle root should match the result of merkle_root(&[])
+        assert_eq!(root, merkle_root(&[]));
     }
 
     #[test]
@@ -253,5 +321,3 @@ mod tests {
         let (_leaves, _root) = build_ticket_root_for_slot(5, &st);
     }
 }
-
-

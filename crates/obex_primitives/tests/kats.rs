@@ -1,37 +1,115 @@
-use obex_primitives::{constants, h_tag};
 use hex::ToHex;
+use obex_primitives::{constants, h_tag};
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn tag_digest_kats() {
     let kat = |tag: &str, exp_hex: &str| {
         let got = h_tag(tag, &[]).encode_hex::<String>();
         assert_eq!(got, exp_hex, "tag {tag}");
     };
-    kat(constants::TAG_MERKLE_EMPTY, "2b254a1bacd43c5377c8fb2311066dee603ce5ed3e71321ab3ed2a3bb622857e");
-    kat(constants::TAG_MERKLE_LEAF,  "3b9fd88425bc051fae7d0a4e9778227e80212baded982cf3bdab5ab5aa52ba06");
-    kat(constants::TAG_MERKLE_NODE,  "07cbd406cb2ce8b3fea580928bf9d664557c4c0c72b3215ff67e27dc5a7d2253");
-    kat(constants::TAG_ALPHA,        "883b7d61f4f9f4cc18d412eac66cfdb19bfbfc92383b0cd6e6e620a1f096070d");
-    kat(constants::TAG_SEED,         "8023e13287b72bd669e5b9f92e0b342d164550b1537f7343644fde245310dd3a");
-    kat(constants::TAG_L0,           "a09a3db5000604ee8a7ada47f2e7aafc30f805721b6b51d1c73a7204024e1435");
-    kat(constants::TAG_LBL,          "e7d8c5c9cd0ce5b9bc63d205195514f827224e1aa34c913e5455c7791051c636");
-    kat(constants::TAG_IDX,          "0425cbb72bd101e03d28889191b573a6beeb4e436ae78c498fc5c3f08a28ce7b");
-    kat(constants::TAG_CHAL,         "75e1a47266a6659af16ddcc39ccb2a3347ffe015d658ce426f5a06208f89844d");
-    kat(constants::TAG_PART_LEAF,    "55c4eedbdf5b4e8e8ffbd5fe2d47534617ba83c4bbb1d84a75cc931b33e3fad1");
-    kat(constants::TAG_PARTREC,      "cc739c2a75978b7ce4c88d3b2925c24e40ce261a5731adcb4ca79608b50227c8");
-    kat(constants::TAG_HEADER_ID,    "85d8423bb811d6c215b2cbc42568c38f00640759efd3a5416361c57f8b371b70");
-    kat(constants::TAG_SLOT_SEED,    "ccce3774273f749084f50d7cb77d27ca122df9ec4135bee7bf17bbd139fa1306");
-    kat(constants::TAG_VDF_YCORE,    "fbabaaa84a0027a961129fbb079d21c31f3ad94cb07967a9f083b765ca930842");
-    kat(constants::TAG_VDF_EDGE,     "d8faf85e6942371bdaf0bbe3aac30dd4cfe80cb3aca5ba9b9563f35223b052dd");
-    kat(constants::TAG_TX_ACCESS,    "c712fcfe14ad6ca1a72228ffea3bef61edd6b11d2a9391030877acf35981d4b7");
-    kat(constants::TAG_TX_BODY_V1,   "f893dfbc8b6dbfe647bba7bfa57436b09da5ee3ee1c2b419fc66b29b0251fe6c");
-    kat(constants::TAG_TX_ID,        "897313290c5dcfebf10f2af3bed98f21088d570651361f0d853b1614589a7a51");
-    kat(constants::TAG_TX_COMMIT,    "aa907d27041c8f35765ef4057a1a41e715fb17f77e57382ce48112a49fd03853");
-    kat(constants::TAG_TX_SIG,       "c85fb31b3b0e4b98cd31580a7e62603504c82c81ed7f97af52c4d41a3aee8628");
-    kat(constants::TAG_TXID_LEAF,    "58cfb4815a8eb38c138190e429ad1abab996832795b1df0e48e6b4d769c9024c");
-    kat(constants::TAG_TICKET_ID,    "5dc7f16b1caa7064713e809d985bb3ba77472748570c2b8c9757a557d4cd70e7");
-    kat(constants::TAG_TICKET_LEAF,  "993238aeb220fefc409177e965a888c838a16063241d28330a11a33a42ca57d9");
-    kat(constants::TAG_SYS_TX,       "3f422b0adf595d81bc5eee166404f365fd300ff13ba8429db776eeec9780d380");
-    kat(constants::TAG_REWARD_DRAW,  "35a5e013fa37e8d90bae90c33dbf853916274223892c12448ac4bbe0e053ac4b");
-    kat(constants::TAG_REWARD_RANK,  "3a066df4094f44a0a9b6f861fc2b10628e3f2f2e5bf39f433e45f6bba559e8d2");
+    kat(
+        constants::TAG_MERKLE_EMPTY,
+        "2b254a1bacd43c5377c8fb2311066dee603ce5ed3e71321ab3ed2a3bb622857e",
+    );
+    kat(
+        constants::TAG_MERKLE_LEAF,
+        "3b9fd88425bc051fae7d0a4e9778227e80212baded982cf3bdab5ab5aa52ba06",
+    );
+    kat(
+        constants::TAG_MERKLE_NODE,
+        "07cbd406cb2ce8b3fea580928bf9d664557c4c0c72b3215ff67e27dc5a7d2253",
+    );
+    kat(
+        constants::TAG_ALPHA,
+        "883b7d61f4f9f4cc18d412eac66cfdb19bfbfc92383b0cd6e6e620a1f096070d",
+    );
+    kat(
+        constants::TAG_SEED,
+        "8023e13287b72bd669e5b9f92e0b342d164550b1537f7343644fde245310dd3a",
+    );
+    kat(
+        constants::TAG_L0,
+        "a09a3db5000604ee8a7ada47f2e7aafc30f805721b6b51d1c73a7204024e1435",
+    );
+    kat(
+        constants::TAG_LBL,
+        "e7d8c5c9cd0ce5b9bc63d205195514f827224e1aa34c913e5455c7791051c636",
+    );
+    kat(
+        constants::TAG_IDX,
+        "0425cbb72bd101e03d28889191b573a6beeb4e436ae78c498fc5c3f08a28ce7b",
+    );
+    kat(
+        constants::TAG_CHAL,
+        "75e1a47266a6659af16ddcc39ccb2a3347ffe015d658ce426f5a06208f89844d",
+    );
+    kat(
+        constants::TAG_PART_LEAF,
+        "55c4eedbdf5b4e8e8ffbd5fe2d47534617ba83c4bbb1d84a75cc931b33e3fad1",
+    );
+    kat(
+        constants::TAG_PARTREC,
+        "cc739c2a75978b7ce4c88d3b2925c24e40ce261a5731adcb4ca79608b50227c8",
+    );
+    kat(
+        constants::TAG_HEADER_ID,
+        "85d8423bb811d6c215b2cbc42568c38f00640759efd3a5416361c57f8b371b70",
+    );
+    kat(
+        constants::TAG_SLOT_SEED,
+        "ccce3774273f749084f50d7cb77d27ca122df9ec4135bee7bf17bbd139fa1306",
+    );
+    kat(
+        constants::TAG_VDF_YCORE,
+        "fbabaaa84a0027a961129fbb079d21c31f3ad94cb07967a9f083b765ca930842",
+    );
+    kat(
+        constants::TAG_VDF_EDGE,
+        "d8faf85e6942371bdaf0bbe3aac30dd4cfe80cb3aca5ba9b9563f35223b052dd",
+    );
+    kat(
+        constants::TAG_TX_ACCESS,
+        "c712fcfe14ad6ca1a72228ffea3bef61edd6b11d2a9391030877acf35981d4b7",
+    );
+    kat(
+        constants::TAG_TX_BODY_V1,
+        "f893dfbc8b6dbfe647bba7bfa57436b09da5ee3ee1c2b419fc66b29b0251fe6c",
+    );
+    kat(
+        constants::TAG_TX_ID,
+        "897313290c5dcfebf10f2af3bed98f21088d570651361f0d853b1614589a7a51",
+    );
+    kat(
+        constants::TAG_TX_COMMIT,
+        "aa907d27041c8f35765ef4057a1a41e715fb17f77e57382ce48112a49fd03853",
+    );
+    kat(
+        constants::TAG_TX_SIG,
+        "c85fb31b3b0e4b98cd31580a7e62603504c82c81ed7f97af52c4d41a3aee8628",
+    );
+    kat(
+        constants::TAG_TXID_LEAF,
+        "58cfb4815a8eb38c138190e429ad1abab996832795b1df0e48e6b4d769c9024c",
+    );
+    kat(
+        constants::TAG_TICKET_ID,
+        "5dc7f16b1caa7064713e809d985bb3ba77472748570c2b8c9757a557d4cd70e7",
+    );
+    kat(
+        constants::TAG_TICKET_LEAF,
+        "993238aeb220fefc409177e965a888c838a16063241d28330a11a33a42ca57d9",
+    );
+    kat(
+        constants::TAG_SYS_TX,
+        "3f422b0adf595d81bc5eee166404f365fd300ff13ba8429db776eeec9780d380",
+    );
+    kat(
+        constants::TAG_REWARD_DRAW,
+        "35a5e013fa37e8d90bae90c33dbf853916274223892c12448ac4bbe0e053ac4b",
+    );
+    kat(
+        constants::TAG_REWARD_RANK,
+        "3a066df4094f44a0a9b6f861fc2b10628e3f2f2e5bf39f433e45f6bba559e8d2",
+    );
 }
-

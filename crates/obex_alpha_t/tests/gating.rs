@@ -5,7 +5,11 @@ use std::cell::RefCell;
 fn emission_runs_and_credits_total() {
     let mut st = EmissionState::default();
     let mut sum = 0u128;
-    for s in 1u128..=1000 { on_slot_emission(&mut st, s, |amt| { sum = sum.saturating_add(amt); }); }
+    for s in 1u128..=1000 {
+        on_slot_emission(&mut st, s, |amt| {
+            sum = sum.saturating_add(amt);
+        });
+    }
     assert!(sum > 0);
 }
 
@@ -14,7 +18,20 @@ fn escrow_conservation_basic() {
     let mut fs = FeeSplitState::default();
     let mut sent = 0u128;
     nlb_roll_epoch_if_needed(0, &mut fs);
-    let (_, fee) = process_transfer(0, 10_000, 2_000, &mut fs, |_|{}, |_|{}, |f| { sent = sent.saturating_add(f); }, |_|{}, |_|{}, |_|{});
+    let (_, fee) = process_transfer(
+        0,
+        10_000,
+        2_000,
+        &mut fs,
+        |_| {},
+        |_| {},
+        |f| {
+            sent = sent.saturating_add(f);
+        },
+        |_| {},
+        |_| {},
+        |_| {},
+    );
     assert!(fs.fee_escrow_u >= fee);
 }
 
@@ -23,7 +40,7 @@ fn route_fee_calls_in_order_and_not_overdraw() {
     let mut fs = FeeSplitState::default();
     nlb_roll_epoch_if_needed(0, &mut fs);
     fs.fee_escrow_u = 0; // start at zero
-    // First accrue fee into escrow
+                         // First accrue fee into escrow
     let mut escrow_credit_total = 0u128;
     let (_total, fee) = process_transfer(
         0,
@@ -32,7 +49,9 @@ fn route_fee_calls_in_order_and_not_overdraw() {
         &mut fs,
         |_| {},
         |_| {},
-        |f| { escrow_credit_total = escrow_credit_total.saturating_add(f); },
+        |f| {
+            escrow_credit_total = escrow_credit_total.saturating_add(f);
+        },
         |_| {},
         |_| {},
         |_| {},
@@ -47,9 +66,21 @@ fn route_fee_calls_in_order_and_not_overdraw() {
         &mut fs,
         10, // numerator
         1,  // denominator (flat)
-        |v| { if v > 0 { calls.borrow_mut().push("verifier"); } },
-        |t| { if t > 0 { calls.borrow_mut().push("treasury"); } },
-        |b| { if b > 0 { calls.borrow_mut().push("burn"); } },
+        |v| {
+            if v > 0 {
+                calls.borrow_mut().push("verifier");
+            }
+        },
+        |t| {
+            if t > 0 {
+                calls.borrow_mut().push("treasury");
+            }
+        },
+        |b| {
+            if b > 0 {
+                calls.borrow_mut().push("burn");
+            }
+        },
     );
     // Order must be verifier -> treasury -> burn when releases occur
     let calls_vec = calls.borrow().clone();
@@ -58,4 +89,3 @@ fn route_fee_calls_in_order_and_not_overdraw() {
     }
     assert!(fs.fee_escrow_u <= start_escrow);
 }
-

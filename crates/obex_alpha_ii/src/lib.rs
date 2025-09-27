@@ -19,14 +19,14 @@
 //! per `obex.alpha II.txt`. Providers for beacon, participation, admission, and tx roots
 //! are passed via traits.
 
-use obex_primitives::{constants, ct_eq_hash, h_tag, le_bytes, Hash256};
+use obex_primitives::{consensus, ct_eq_hash, le_bytes, Hash256};
 use thiserror::Error;
 
 /// Network version (consensus-sealed)
 pub const OBEX_ALPHA_II_VERSION: u32 = 2;
 /// Consensus size caps for beacon fields (deployment-defined; enforced before verification).
-pub const MAX_PI_LEN: usize = 1_048_576;  // example: 1 MiB
-pub const MAX_ELL_LEN: usize = 65_536;    // example: 64 KiB
+pub const MAX_PI_LEN: usize = 1_048_576; // example: 1 MiB
+pub const MAX_ELL_LEN: usize = 65_536; // example: 64 KiB
 
 /// Providers (adapters) for equality checks
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,11 +40,19 @@ pub struct BeaconInputs<'a> {
     pub vdf_ell: &'a [u8],
 }
 
-pub trait BeaconVerifier { fn verify(&self, inputs: &BeaconInputs<'_>) -> bool; }
+pub trait BeaconVerifier {
+    fn verify(&self, inputs: &BeaconInputs<'_>) -> bool;
+}
 
-pub trait TicketRootProvider { fn compute_ticket_root(&self, slot: u64) -> Hash256; }
-pub trait PartRootProvider   { fn compute_part_root(&self, slot: u64) -> Hash256; }
-pub trait TxRootProvider     { fn compute_txroot(&self, slot: u64) -> Hash256; }
+pub trait TicketRootProvider {
+    fn compute_ticket_root(&self, slot: u64) -> Hash256;
+}
+pub trait PartRootProvider {
+    fn compute_part_root(&self, slot: u64) -> Hash256;
+}
+pub trait TxRootProvider {
+    fn compute_txroot(&self, slot: u64) -> Hash256;
+}
 
 /// Canonical header object
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,33 +77,45 @@ pub struct Header {
 /// Canonical header ID over field values (not transport bytes)
 #[must_use]
 pub fn obex_header_id(h: &Header) -> Hash256 {
-    h_tag(constants::TAG_HEADER_ID, &[
-        &h.parent_id,
-        &le_bytes::<8>(u128::from(h.slot)),
-        &le_bytes::<4>(u128::from(h.obex_version)),
-
-        &h.seed_commit,
-        &h.vdf_y_core,
-        &h.vdf_y_edge,
-        &le_bytes::<4>(h.vdf_pi.len() as u128),
-        &h.vdf_pi,
-        &le_bytes::<4>(h.vdf_ell.len() as u128),
-        &h.vdf_ell,
-
-        &h.ticket_root,
-        &h.part_root,
-        &h.txroot_prev,
-    ])
+    consensus::h_tag(
+        "obex.header.id",
+        &[
+            &h.parent_id,
+            &le_bytes::<8>(u128::from(h.slot)),
+            &le_bytes::<4>(u128::from(h.obex_version)),
+            &h.seed_commit,
+            &h.vdf_y_core,
+            &h.vdf_y_edge,
+            &le_bytes::<4>(h.vdf_pi.len() as u128),
+            &h.vdf_pi,
+            &le_bytes::<4>(h.vdf_ell.len() as u128),
+            &h.vdf_ell,
+            &h.ticket_root,
+            &h.part_root,
+            &h.txroot_prev,
+        ],
+    )
 }
 
 // ——— Canonical header serializer/deserializer (wire layout §4.1) ————
 
 #[derive(Debug, Error)]
-pub enum CodecError { #[error("short input")] Short, #[error("trailing")] Trailing }
+pub enum CodecError {
+    #[error("short input")]
+    Short,
+    #[error("trailing")]
+    Trailing,
+    #[error("size cap")]
+    TooLong,
+}
 
 const fn read_exact<'a>(src: &mut &'a [u8], n: usize) -> Result<&'a [u8], CodecError> {
-    if src.len() < n { return Err(CodecError::Short); }
-    let (a,b) = src.split_at(n); *src = b; Ok(a)
+    if src.len() < n {
+        return Err(CodecError::Short);
+    }
+    let (a, b) = src.split_at(n);
+    *src = b;
+    Ok(a)
 }
 
 #[must_use]
@@ -120,21 +140,76 @@ pub fn serialize_header(h: &Header) -> Vec<u8> {
 }
 
 pub fn deserialize_header(mut src: &[u8]) -> Result<Header, CodecError> {
-    let parent_id = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
-    let slot      = u64::from_le_bytes(read_exact(&mut src, 8)?.try_into().unwrap());
+    let parent_id = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
+    let slot = u64::from_le_bytes(read_exact(&mut src, 8)?.try_into().unwrap());
     let obex_version = u32::from_le_bytes(read_exact(&mut src, 4)?.try_into().unwrap());
-    let seed_commit = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
-    let vdf_y_core  = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
-    let vdf_y_edge  = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
+    let seed_commit = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
+    let vdf_y_core = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
+    let vdf_y_edge = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
     let pi_len = u32::from_le_bytes(read_exact(&mut src, 4)?.try_into().unwrap()) as usize;
+    if pi_len > MAX_PI_LEN {
+        return Err(CodecError::TooLong);
+    }
     let vdf_pi = read_exact(&mut src, pi_len)?.to_vec();
     let ell_len = u32::from_le_bytes(read_exact(&mut src, 4)?.try_into().unwrap()) as usize;
+    if ell_len > MAX_ELL_LEN {
+        return Err(CodecError::TooLong);
+    }
     let vdf_ell = read_exact(&mut src, ell_len)?.to_vec();
-    let ticket_root = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
-    let part_root   = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
-    let txroot_prev = { let b = read_exact(&mut src, 32)?; let mut a = [0u8;32]; a.copy_from_slice(b); a };
-    if !src.is_empty() { return Err(CodecError::Trailing); }
-    Ok(Header { parent_id, slot, obex_version, seed_commit, vdf_y_core, vdf_y_edge, vdf_pi, vdf_ell, ticket_root, part_root, txroot_prev })
+    let ticket_root = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
+    let part_root = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
+    let txroot_prev = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
+    if !src.is_empty() {
+        return Err(CodecError::Trailing);
+    }
+    Ok(Header {
+        parent_id,
+        slot,
+        obex_version,
+        seed_commit,
+        vdf_y_core,
+        vdf_y_edge,
+        vdf_pi,
+        vdf_ell,
+        ticket_root,
+        part_root,
+        txroot_prev,
+    })
 }
 
 /// Build the canonical header for slot s = parent.slot + 1.
@@ -173,12 +248,14 @@ pub fn build_header(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidateErr {
     BadParentLink,
-    BadSlotProgression,
+    BadSlot,
     BeaconInvalid,
     TicketRootMismatch,
     PartRootMismatch,
     TxRootPrevMismatch,
     VersionMismatch,
+    VdfPiTooBig,
+    VdfEllTooBig,
 }
 
 /// Validate a candidate header against deterministic equalities.
@@ -193,13 +270,25 @@ pub fn validate_header(
 ) -> Result<(), ValidateErr> {
     // 1) Parent linkage & slot progression
     let parent_id_expected = obex_header_id(parent);
-    if !ct_eq_hash(&h.parent_id, &parent_id_expected) { return Err(ValidateErr::BadParentLink); }
-    if h.slot != parent.slot + 1 { return Err(ValidateErr::BadSlotProgression); }
-
-    // 2) Beacon equality & caps (size first)
-    if h.vdf_pi.len() > MAX_PI_LEN || h.vdf_ell.len() > MAX_ELL_LEN {
-    return Err(ValidateErr::BeaconInvalid);
+    if !ct_eq_hash(&h.parent_id, &parent_id_expected) {
+        return Err(ValidateErr::BadParentLink);
     }
+    if h.slot != parent.slot + 1 {
+        return Err(ValidateErr::BadSlot);
+    }
+    if h.obex_version != expected_version {
+        return Err(ValidateErr::VersionMismatch);
+    }
+
+    // 2) VDF size checks
+    if h.vdf_pi.len() > MAX_PI_LEN {
+        return Err(ValidateErr::VdfPiTooBig);
+    }
+    if h.vdf_ell.len() > MAX_ELL_LEN {
+        return Err(ValidateErr::VdfEllTooBig);
+    }
+
+    // 3) Beacon verification
     if !beacon.verify(&BeaconInputs {
         parent_id: &h.parent_id,
         slot: h.slot,
@@ -212,20 +301,23 @@ pub fn validate_header(
         return Err(ValidateErr::BeaconInvalid);
     }
 
-    // 3) Admission equality (slot s)
+    // 4) Ticket root equality (slot s)
     let ticket_root_local = ticket_roots.compute_ticket_root(h.slot);
-    if !ct_eq_hash(&h.ticket_root, &ticket_root_local) { return Err(ValidateErr::TicketRootMismatch); }
+    if !ct_eq_hash(&h.ticket_root, &ticket_root_local) {
+        return Err(ValidateErr::TicketRootMismatch);
+    }
 
-    // 4) Participation equality (slot s)
+    // 5) Participation root equality (slot s)
     let part_root_local = part_roots.compute_part_root(h.slot);
-    if !ct_eq_hash(&h.part_root, &part_root_local) { return Err(ValidateErr::PartRootMismatch); }
+    if !ct_eq_hash(&h.part_root, &part_root_local) {
+        return Err(ValidateErr::PartRootMismatch);
+    }
 
-    // 5) Execution equality (slot s-1)
+    // 6) Transaction root equality (slot s-1)
     let txroot_prev_local = tx_roots.compute_txroot(parent.slot);
-    if !ct_eq_hash(&h.txroot_prev, &txroot_prev_local) { return Err(ValidateErr::TxRootPrevMismatch); }
-
-    // 6) Version equality
-    if h.obex_version != expected_version { return Err(ValidateErr::VersionMismatch); }
+    if !ct_eq_hash(&h.txroot_prev, &txroot_prev_local) {
+        return Err(ValidateErr::TxRootPrevMismatch);
+    }
 
     Ok(())
 }
@@ -234,11 +326,27 @@ pub fn validate_header(
 mod tests {
     use super::*;
     struct BeaconOk;
-    impl BeaconVerifier for BeaconOk { fn verify(&self, _inputs: &BeaconInputs<'_>) -> bool { true } }
+    impl BeaconVerifier for BeaconOk {
+        fn verify(&self, _inputs: &BeaconInputs<'_>) -> bool {
+            true
+        }
+    }
     struct ZeroRoot;
-    impl TicketRootProvider for ZeroRoot { fn compute_ticket_root(&self, _slot: u64) -> Hash256 { [0u8; 32] } }
-    impl PartRootProvider   for ZeroRoot { fn compute_part_root(&self, _slot: u64) -> Hash256 { [0u8; 32] } }
-    impl TxRootProvider     for ZeroRoot { fn compute_txroot(&self, _slot: u64) -> Hash256 { [0u8; 32] } }
+    impl TicketRootProvider for ZeroRoot {
+        fn compute_ticket_root(&self, _slot: u64) -> Hash256 {
+            [0u8; 32]
+        }
+    }
+    impl PartRootProvider for ZeroRoot {
+        fn compute_part_root(&self, _slot: u64) -> Hash256 {
+            [0u8; 32]
+        }
+    }
+    impl TxRootProvider for ZeroRoot {
+        fn compute_txroot(&self, _slot: u64) -> Hash256 {
+            [0u8; 32]
+        }
+    }
 
     #[test]
     fn header_build_and_validate_roundtrip() {
@@ -265,8 +373,15 @@ mod tests {
             OBEX_ALPHA_II_VERSION,
         );
         let beacon = BeaconOk;
-        assert!(validate_header(&h, &parent, &beacon, &providers, &providers, &providers, OBEX_ALPHA_II_VERSION).is_ok());
+        assert!(validate_header(
+            &h,
+            &parent,
+            &beacon,
+            &providers,
+            &providers,
+            &providers,
+            OBEX_ALPHA_II_VERSION
+        )
+        .is_ok());
     }
 }
-
-

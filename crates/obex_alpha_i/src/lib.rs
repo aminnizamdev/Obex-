@@ -20,7 +20,10 @@
 //! integrated via vetted crates or pluggable trait providers.
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use obex_primitives::{constants, ct_eq_hash, h_tag, le_bytes, merkle_root, merkle_verify_leaf, u64_from_le, Hash256, Pk32, Sig64};
+use obex_primitives::{
+    consensus, ct_eq_hash, le_bytes, merkle_root, merkle_verify_leaf, u64_from_le, Hash256,
+    Pk32, Sig64,
+};
 use thiserror::Error;
 
 /// Consensus constants (network versioned)
@@ -29,10 +32,10 @@ pub const MEM_MIB: usize = 512; // target RAM per prover instance
 pub const LABEL_BYTES: usize = 32; // SHA3-256 width
 pub const N_LABELS: usize = (MEM_MIB * 1_048_576) / LABEL_BYTES; // 16,777,216
 pub const PASSES: u32 = 3; // diffusion passes
-pub const CHALLENGES_Q: usize = 96; // residual cheat ≈ 2^-96
-pub const MAX_PARTREC_SIZE: usize = 600_000; // DoS cap on serialized proof
+pub const CHALLENGES_Q: usize = 96; // deterministic Q=96, residual cheat ≈ 2^-96
+pub const MAX_PARTREC_SIZE: usize = consensus::MAX_PARTREC_SIZE; // DoS cap on serialized proof
 
-/// VRF public key type (Ed25519 curve per RFC 9381 ECVRF-EDWARDS25519-SHA512-ELL2)
+/// VRF public key type (Ed25519 curve per RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI)
 pub type VrfPk32 = [u8; 32];
 
 /// Merkle path lite used within challenges
@@ -67,12 +70,12 @@ pub struct ObexPartRec {
     pub vrf_pk: VrfPk32,
     pub y_edge_prev: Hash256,
     pub alpha: Hash256,
-    pub vrf_y: Vec<u8>, // 64 or 32 bytes (network-wide fixed)
+    pub vrf_y: Vec<u8>,  // 64 or 32 bytes (network-wide fixed)
     pub vrf_pi: Vec<u8>, // RFC 9381
     pub seed: Hash256,
     pub root: Hash256,
     pub challenges: Vec<ChallengeOpen>, // len == CHALLENGES_Q
-    pub sig: Sig64, // Ed25519 over transcript
+    pub sig: Sig64,                     // Ed25519 over transcript
 }
 
 /// VRF verifier provider interface (pluggable for RFC 9381 ECVRF)
@@ -86,38 +89,73 @@ pub mod vrf;
 
 #[inline]
 fn obex_alpha(parent_id: &Hash256, slot: u64, y_prev: &Hash256, vrf_pk: &VrfPk32) -> Hash256 {
-    h_tag(constants::TAG_ALPHA, &[parent_id, &le_bytes::<8>(u128::from(slot)), y_prev, vrf_pk])
+    consensus::h_tag(
+        "obex.alpha",
+        &[parent_id, &le_bytes::<8>(u128::from(slot)), y_prev, vrf_pk],
+    )
 }
 
 #[inline]
 fn obex_seed(y_prev: &Hash256, pk: &Pk32, vrf_y: &[u8]) -> Hash256 {
-    h_tag(constants::TAG_SEED, &[y_prev, pk, vrf_y])
+    consensus::h_tag("obex.seed", &[y_prev, pk, vrf_y])
 }
 
 #[inline]
 #[allow(dead_code)]
-fn lbl0(seed: &Hash256) -> Hash256 { h_tag(constants::TAG_L0, &[seed]) }
+fn lbl0(seed: &Hash256) -> Hash256 {
+    consensus::h_tag("obex.l0", &[seed])
+}
 
 #[inline]
 fn idx_j(seed: &Hash256, i: u64, p: u32) -> u64 {
-    let b = h_tag(constants::TAG_IDX, &[seed, &le_bytes::<8>(u128::from(i)), &le_bytes::<4>(u128::from(p)), &[0x00]]);
-    if i == 0 { 0 } else { u64_from_le(&b[..8]) % i }
+    let b = consensus::h_tag(
+        "obex.idx",
+        &[
+            seed,
+            &le_bytes::<8>(u128::from(i)),
+            &le_bytes::<4>(u128::from(p)),
+            &[0x00],
+        ],
+    );
+    if i == 0 {
+        0
+    } else {
+        u64_from_le(&b[..8]) % i
+    }
 }
 
 #[inline]
 fn idx_k(seed: &Hash256, i: u64, p: u32) -> u64 {
-    let b = h_tag(constants::TAG_IDX, &[seed, &le_bytes::<8>(u128::from(i)), &le_bytes::<4>(u128::from(p)), &[0x01]]);
-    if i == 0 { 0 } else { u64_from_le(&b[..8]) % i }
+    let b = consensus::h_tag(
+        "obex.idx",
+        &[
+            seed,
+            &le_bytes::<8>(u128::from(i)),
+            &le_bytes::<4>(u128::from(p)),
+            &[0x01],
+        ],
+    );
+    if i == 0 {
+        0
+    } else {
+        u64_from_le(&b[..8]) % i
+    }
 }
 
 #[inline]
 fn label_update(seed: &Hash256, i: u64, l_im1: &Hash256, l_j: &Hash256, l_k: &Hash256) -> Hash256 {
-    h_tag(constants::TAG_LBL, &[seed, &le_bytes::<8>(u128::from(i)), l_im1, l_j, l_k])
+    consensus::h_tag(
+        "obex.lbl",
+        &[seed, &le_bytes::<8>(u128::from(i)), l_im1, l_j, l_k],
+    )
 }
 
 #[inline]
 fn chal_index(y_prev: &Hash256, root: &Hash256, vrf_y: &[u8], t: u32) -> u64 {
-    let b = h_tag(constants::TAG_CHAL, &[y_prev, root, vrf_y, &le_bytes::<4>(u128::from(t))]);
+    let b = consensus::h_tag(
+        "obex.chal",
+        &[y_prev, root, vrf_y, &le_bytes::<4>(u128::from(t))],
+    );
     1 + (u64_from_le(&b[..8]) % ((N_LABELS as u64) - 1))
 }
 
@@ -133,16 +171,19 @@ struct TranscriptParts<'a> {
 }
 
 fn partrec_msg(p: &TranscriptParts<'_>) -> Hash256 {
-    h_tag(constants::TAG_PARTREC, &[
-        &le_bytes::<4>(u128::from(p.version)),
-        p.pk,
-        p.vrf_pk,
-        &le_bytes::<8>(u128::from(p.slot)),
-        p.y_prev,
-        p.alpha,
-        p.vrf_y,
-        p.root,
-    ])
+    consensus::h_tag(
+        "obex.partrec",
+        &[
+            &le_bytes::<4>(u128::from(p.version)),
+            p.pk,
+            p.vrf_pk,
+            &le_bytes::<8>(u128::from(p.slot)),
+            p.y_prev,
+            p.alpha,
+            p.vrf_y,
+            p.root,
+        ],
+    )
 }
 
 fn verify_sig(pk: &Pk32, msg: &Hash256, sig: &Sig64) -> bool {
@@ -153,27 +194,61 @@ fn verify_sig(pk: &Pk32, msg: &Hash256, sig: &Sig64) -> bool {
     }
 }
 
-/// Verify a received `ObexPartRec` for target slot `slot`.
-#[must_use]
-pub fn obex_verify_partrec(
+/// Error variants for precise verification failures
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyErr {
+    VersionMismatch,
+    SlotMismatch,
+    ChallengesLen,
+    AlphaMismatch,
+    VrfVerifyFailed,
+    VrfOutputMismatch,
+    SeedMismatch,
+    SigInvalid,
+    ChalIndexMismatch,
+    ChalIndexBounds,
+    JOrKOutOfRange,
+    MerkleLiInvalid,
+    MerkleLim1Invalid,
+    MerkleLjInvalid,
+    MerkleLkInvalid,
+    LabelEquationMismatch,
+}
+
+/// Verify a received `ObexPartRec` for target slot `slot` with precise errors.
+pub fn obex_check_partrec(
     rec: &ObexPartRec,
     slot: u64,
     parent_id: &Hash256,
     vrf: &impl EcVrfVerifier,
-) -> bool {
-    if rec.version != OBEX_ALPHA_I_VERSION { return false; }
-    if rec.slot != slot { return false; }
-    if rec.challenges.len() != CHALLENGES_Q { return false; }
+) -> Result<(), VerifyErr> {
+    if rec.version != OBEX_ALPHA_I_VERSION {
+        return Err(VerifyErr::VersionMismatch);
+    }
+    if rec.slot != slot {
+        return Err(VerifyErr::SlotMismatch);
+    }
+    if rec.challenges.len() != CHALLENGES_Q {
+        return Err(VerifyErr::ChallengesLen);
+    }
 
     // 1) VRF
     let alpha = obex_alpha(parent_id, slot, &rec.y_edge_prev, &rec.vrf_pk);
-    if !ct_eq_hash(&alpha, &rec.alpha) { return false; }
-    let Some(vrf_y_check) = vrf.verify(&rec.vrf_pk, &alpha, &rec.vrf_pi) else { return false };
-    if vrf_y_check.as_slice() != rec.vrf_y.as_slice() { return false; }
+    if !ct_eq_hash(&alpha, &rec.alpha) {
+        return Err(VerifyErr::AlphaMismatch);
+    }
+    let Some(vrf_y_check) = vrf.verify(&rec.vrf_pk, &alpha, &rec.vrf_pi) else {
+        return Err(VerifyErr::VrfVerifyFailed);
+    };
+    if vrf_y_check.as_slice() != rec.vrf_y.as_slice() {
+        return Err(VerifyErr::VrfOutputMismatch);
+    }
 
     // 2) Seed
     let seed_expected = obex_seed(&rec.y_edge_prev, &rec.pk_ed25519, &rec.vrf_y);
-    if !ct_eq_hash(&seed_expected, &rec.seed) { return false; }
+    if !ct_eq_hash(&seed_expected, &rec.seed) {
+        return Err(VerifyErr::SeedMismatch);
+    }
 
     // 3) Signature
     let msg = partrec_msg(&TranscriptParts {
@@ -186,31 +261,90 @@ pub fn obex_verify_partrec(
         vrf_y: &rec.vrf_y,
         root: &rec.root,
     });
-    if !verify_sig(&rec.pk_ed25519, &msg, &rec.sig) { return false; }
+    if !verify_sig(&rec.pk_ed25519, &msg, &rec.sig) {
+        return Err(VerifyErr::SigInvalid);
+    }
 
     // 4) Challenges
     let last_pass = PASSES - 1;
     for (t, ch) in rec.challenges.iter().enumerate() {
-        let Ok(t_u32) = u32::try_from(t) else { return false };
+        let Ok(t_u32) = u32::try_from(t) else {
+            return Err(VerifyErr::ChalIndexBounds);
+        };
         let i = chal_index(&rec.y_edge_prev, &rec.root, &rec.vrf_y, t_u32);
-        if ch.idx != i { return false; }
-        if !(i > 0 && usize::try_from(i).is_ok_and(|ii| ii < N_LABELS)) { return false; }
+        if ch.idx != i {
+            return Err(VerifyErr::ChalIndexMismatch);
+        }
+        if !(i > 0 && usize::try_from(i).is_ok_and(|ii| ii < N_LABELS)) {
+            return Err(VerifyErr::ChalIndexBounds);
+        }
 
         let j = idx_j(&rec.seed, i, last_pass);
         let k = idx_k(&rec.seed, i, last_pass);
-        if !(j < i && k < i) { return false; }
+        if !(j < i && k < i) {
+            return Err(VerifyErr::JOrKOutOfRange);
+        }
 
         // Merkle paths
-        if !merkle_verify_leaf(&rec.root, &ch.li,   &obex_primitives::MerklePath { siblings: ch.pi.siblings.clone(),   index: i }) { return false; }
-        if !merkle_verify_leaf(&rec.root, &ch.lim1, &obex_primitives::MerklePath { siblings: ch.pim1.siblings.clone(), index: i - 1 }) { return false; }
-        if !merkle_verify_leaf(&rec.root, &ch.lj,   &obex_primitives::MerklePath { siblings: ch.pj.siblings.clone(),   index: j }) { return false; }
-        if !merkle_verify_leaf(&rec.root, &ch.lk,   &obex_primitives::MerklePath { siblings: ch.pk_.siblings.clone(),  index: k }) { return false; }
+        if !merkle_verify_leaf(
+            &rec.root,
+            &ch.li,
+            &obex_primitives::MerklePath {
+                siblings: ch.pi.siblings.clone(),
+                index: i,
+            },
+        ) {
+            return Err(VerifyErr::MerkleLiInvalid);
+        }
+        if !merkle_verify_leaf(
+            &rec.root,
+            &ch.lim1,
+            &obex_primitives::MerklePath {
+                siblings: ch.pim1.siblings.clone(),
+                index: i - 1,
+            },
+        ) {
+            return Err(VerifyErr::MerkleLim1Invalid);
+        }
+        if !merkle_verify_leaf(
+            &rec.root,
+            &ch.lj,
+            &obex_primitives::MerklePath {
+                siblings: ch.pj.siblings.clone(),
+                index: j,
+            },
+        ) {
+            return Err(VerifyErr::MerkleLjInvalid);
+        }
+        if !merkle_verify_leaf(
+            &rec.root,
+            &ch.lk,
+            &obex_primitives::MerklePath {
+                siblings: ch.pk_.siblings.clone(),
+                index: k,
+            },
+        ) {
+            return Err(VerifyErr::MerkleLkInvalid);
+        }
 
         // Label equation
         let li_check = label_update(&rec.seed, i, &ch.lim1, &ch.lj, &ch.lk);
-        if !ct_eq_hash(&li_check, &ch.li) { return false; }
+        if !ct_eq_hash(&li_check, &ch.li) {
+            return Err(VerifyErr::LabelEquationMismatch);
+        }
     }
-    true
+    Ok(())
+}
+
+/// Verify a received `ObexPartRec` for target slot `slot`.
+#[must_use]
+pub fn obex_verify_partrec(
+    rec: &ObexPartRec,
+    slot: u64,
+    parent_id: &Hash256,
+    vrf: &impl EcVrfVerifier,
+) -> bool {
+    obex_check_partrec(rec, slot, parent_id, vrf).is_ok()
 }
 
 /// Build the participation set `P_s` and its commitment root for a slot, given an iterator of submissions.
@@ -226,8 +360,12 @@ pub fn build_participation_set<'a>(
     let mut pks: Vec<Pk32> = Vec::new();
 
     for rec in submissions {
-        if rec.slot != slot { continue; }
-        if seen.contains(&rec.pk_ed25519) { continue; }
+        if rec.slot != slot {
+            continue;
+        }
+        if seen.contains(&rec.pk_ed25519) {
+            continue;
+        }
         if obex_verify_partrec(rec, slot, parent_id, vrf) {
             seen.insert(rec.pk_ed25519);
             pks.push(rec.pk_ed25519);
@@ -236,12 +374,15 @@ pub fn build_participation_set<'a>(
     pks.sort_unstable();
 
     // part_root = Merkle over H("obex.part.leaf",[]) || pk
-    let leaves: Vec<Vec<u8>> = pks.iter().map(|pk| {
-        let mut b = Vec::with_capacity(32 + 32);
-        b.extend_from_slice(&h_tag(constants::TAG_PART_LEAF, &[]));
-        b.extend_from_slice(pk);
-        b
-    }).collect();
+    let leaves: Vec<Vec<u8>> = pks
+        .iter()
+        .map(|pk| {
+            let mut b = Vec::with_capacity(32 + 32);
+            b.extend_from_slice(&consensus::h_tag("obex.part.leaf", &[]));
+            b.extend_from_slice(pk);
+            b
+        })
+        .collect();
     let part_root = merkle_root(&leaves);
 
     (pks, part_root)
@@ -268,16 +409,24 @@ mod tests {
 
 #[derive(Debug, Error)]
 pub enum CodecError {
-    #[error("input too short")] Short,
-    #[error("trailing bytes after decode")] Trailing,
-    #[error("bad vector length")] BadLen,
-    #[error("vrf_y must be 64 bytes")] BadVrfY,
-    #[error("vrf_pi must be 80 bytes")] BadVrfPi,
-    #[error("wrong challenges count")] BadChallenges,
+    #[error("input too short")]
+    Short,
+    #[error("trailing bytes after decode")]
+    Trailing,
+    #[error("bad vector length")]
+    BadLen,
+    #[error("vrf_y must be 64 bytes (deterministic length)")]
+    BadVrfY,
+    #[error("vrf_pi must be 80 bytes (deterministic length)")]
+    BadVrfPi,
+    #[error("wrong challenges count")]
+    BadChallenges,
 }
 
 const fn read_exact<'a>(src: &mut &'a [u8], n: usize) -> Result<&'a [u8], CodecError> {
-    if src.len() < n { return Err(CodecError::Short); }
+    if src.len() < n {
+        return Err(CodecError::Short);
+    }
     let (a, b) = src.split_at(n);
     *src = b;
     Ok(a)
@@ -305,17 +454,27 @@ fn read_hash(src: &mut &[u8]) -> Result<Hash256, CodecError> {
 fn read_hash_vec(src: &mut &[u8]) -> Result<Vec<Hash256>, CodecError> {
     let n = read_u32(src)? as usize;
     let mut v = Vec::with_capacity(n);
-    for _ in 0..n { v.push(read_hash(src)?); }
+    for _ in 0..n {
+        v.push(read_hash(src)?);
+    }
     Ok(v)
 }
 
-fn write_le<const W: usize>(out: &mut Vec<u8>, x: u128) { out.extend_from_slice(&le_bytes::<W>(x)); }
-fn write_bytes(out: &mut Vec<u8>, b: &[u8]) { out.extend_from_slice(b); }
-fn write_hash(out: &mut Vec<u8>, h: &Hash256) { out.extend_from_slice(h); }
+fn write_le<const W: usize>(out: &mut Vec<u8>, x: u128) {
+    out.extend_from_slice(&le_bytes::<W>(x));
+}
+fn write_bytes(out: &mut Vec<u8>, b: &[u8]) {
+    out.extend_from_slice(b);
+}
+fn write_hash(out: &mut Vec<u8>, h: &Hash256) {
+    out.extend_from_slice(h);
+}
 
 fn encode_hash_vec(out: &mut Vec<u8>, v: &[Hash256]) {
     write_le::<4>(out, v.len() as u128);
-    for h in v { write_hash(out, h); }
+    for h in v {
+        write_hash(out, h);
+    }
 }
 
 fn encode_challenge(out: &mut Vec<u8>, ch: &ChallengeOpen) {
@@ -331,9 +490,15 @@ fn encode_challenge(out: &mut Vec<u8>, ch: &ChallengeOpen) {
 }
 
 pub fn encode_partrec(rec: &ObexPartRec) -> Result<Vec<u8>, CodecError> {
-    if rec.vrf_y.len() != 64 { return Err(CodecError::BadVrfY); }
-    if rec.vrf_pi.len() != 80 { return Err(CodecError::BadVrfPi); }
-    if rec.challenges.len() != CHALLENGES_Q { return Err(CodecError::BadChallenges); }
+    if rec.vrf_y.len() != 64 {
+        return Err(CodecError::BadVrfY);
+    }
+    if rec.vrf_pi.len() != 80 {
+        return Err(CodecError::BadVrfPi);
+    }
+    if rec.challenges.len() != CHALLENGES_Q {
+        return Err(CodecError::BadChallenges);
+    }
     let mut out = Vec::new();
     write_le::<4>(&mut out, u128::from(rec.version));
     write_le::<8>(&mut out, u128::from(rec.slot));
@@ -347,7 +512,9 @@ pub fn encode_partrec(rec: &ObexPartRec) -> Result<Vec<u8>, CodecError> {
     write_hash(&mut out, &rec.root);
     // challenges: LE(4) count then bodies
     write_le::<4>(&mut out, rec.challenges.len() as u128);
-    for ch in &rec.challenges { encode_challenge(&mut out, ch); }
+    for ch in &rec.challenges {
+        encode_challenge(&mut out, ch);
+    }
     write_bytes(&mut out, &rec.sig);
     Ok(out)
 }
@@ -356,35 +523,99 @@ pub fn decode_partrec(mut src: &[u8]) -> Result<ObexPartRec, CodecError> {
     let version = read_u32(&mut src)?;
     let slot = read_u64(&mut src)?;
     let pk_ed25519 = {
-        let b = read_exact(&mut src, 32)?; let mut a = [0u8; 32]; a.copy_from_slice(b); a
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
     };
-    let vrf_pk = { let b = read_exact(&mut src, 32)?; let mut a = [0u8; 32]; a.copy_from_slice(b); a };
+    let vrf_pk = {
+        let b = read_exact(&mut src, 32)?;
+        let mut a = [0u8; 32];
+        a.copy_from_slice(b);
+        a
+    };
     let y_edge_prev = read_hash(&mut src)?;
     let alpha = read_hash(&mut src)?;
     let vrf_y = {
-        let b = read_exact(&mut src, 64)?; b.to_vec()
+        let b = read_exact(&mut src, 64)?;
+        b.to_vec()
     };
-    let vrf_proof = { let b = read_exact(&mut src, 80)?; b.to_vec() };
+    let vrf_proof = {
+        let b = read_exact(&mut src, 80)?;
+        b.to_vec()
+    };
     let seed = read_hash(&mut src)?;
     let root = read_hash(&mut src)?;
     let n_ch = read_u32(&mut src)? as usize;
-    if n_ch != CHALLENGES_Q { return Err(CodecError::BadChallenges); }
+    if n_ch != CHALLENGES_Q {
+        return Err(CodecError::BadChallenges);
+    }
     let mut challenges = Vec::with_capacity(n_ch);
     for _ in 0..n_ch {
         let idx = read_u64(&mut src)?;
         let li = read_hash(&mut src)?;
-        let pi = obex_primitives::MerklePath { siblings: read_hash_vec(&mut src)?, index: 0 };
+        let pi = obex_primitives::MerklePath {
+            siblings: read_hash_vec(&mut src)?,
+            index: 0,
+        };
         let lim1 = read_hash(&mut src)?;
-        let pim1 = obex_primitives::MerklePath { siblings: read_hash_vec(&mut src)?, index: 0 };
+        let pim1 = obex_primitives::MerklePath {
+            siblings: read_hash_vec(&mut src)?,
+            index: 0,
+        };
         let lj = read_hash(&mut src)?;
-        let pj = obex_primitives::MerklePath { siblings: read_hash_vec(&mut src)?, index: 0 };
+        let pj = obex_primitives::MerklePath {
+            siblings: read_hash_vec(&mut src)?,
+            index: 0,
+        };
         let lk = read_hash(&mut src)?;
-        let pk_ = obex_primitives::MerklePath { siblings: read_hash_vec(&mut src)?, index: 0 };
-        challenges.push(ChallengeOpen { idx, li, pi: MerklePathLite { siblings: pi.siblings }, lim1, pim1: MerklePathLite { siblings: pim1.siblings }, lj, pj: MerklePathLite { siblings: pj.siblings }, lk, pk_: MerklePathLite { siblings: pk_.siblings } });
+        let pk_ = obex_primitives::MerklePath {
+            siblings: read_hash_vec(&mut src)?,
+            index: 0,
+        };
+        challenges.push(ChallengeOpen {
+            idx,
+            li,
+            pi: MerklePathLite {
+                siblings: pi.siblings,
+            },
+            lim1,
+            pim1: MerklePathLite {
+                siblings: pim1.siblings,
+            },
+            lj,
+            pj: MerklePathLite {
+                siblings: pj.siblings,
+            },
+            lk,
+            pk_: MerklePathLite {
+                siblings: pk_.siblings,
+            },
+        });
     }
-    let sig = { let b = read_exact(&mut src, 64)?; let mut s = [0u8; 64]; s.copy_from_slice(b); s };
-    if !src.is_empty() { return Err(CodecError::Trailing); }
-    Ok(ObexPartRec { version, slot, pk_ed25519, vrf_pk, y_edge_prev, alpha, vrf_y, vrf_pi: vrf_proof, seed, root, challenges, sig })
+    let sig = {
+        let b = read_exact(&mut src, 64)?;
+        let mut s = [0u8; 64];
+        s.copy_from_slice(b);
+        s
+    };
+    if !src.is_empty() {
+        return Err(CodecError::Trailing);
+    }
+    Ok(ObexPartRec {
+        version,
+        slot,
+        pk_ed25519,
+        vrf_pk,
+        y_edge_prev,
+        alpha,
+        vrf_y,
+        vrf_pi: vrf_proof,
+        seed,
+        root,
+        challenges,
+        sig,
+    })
 }
 
 /// Verify directly from canonical bytes with `MAX_PARTREC_SIZE` enforcement before heavy work.
@@ -394,9 +625,11 @@ pub fn obex_verify_partrec_bytes(
     parent_id: &Hash256,
     vrf: &impl EcVrfVerifier,
 ) -> bool {
-    if bytes.len() > MAX_PARTREC_SIZE { return false; }
-    let Ok(rec) = decode_partrec(bytes) else { return false };
+    if bytes.len() > MAX_PARTREC_SIZE {
+        return false;
+    }
+    let Ok(rec) = decode_partrec(bytes) else {
+        return false;
+    };
     obex_verify_partrec(&rec, slot, parent_id, vrf)
 }
-
-
