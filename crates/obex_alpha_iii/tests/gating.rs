@@ -38,8 +38,5 @@ fn reject_fee_mismatch() {
 fn empty_slot_ticket_root_matches_empty_tag() {
     let st = AlphaIIIState::default();
     let (_leaves, root) = build_ticket_root_for_slot(1, &st);
-    assert_eq!(
-        root,
-        obex_primitives::merkle_root(&[])
-    );
+    assert_eq!(root, obex_primitives::merkle_root(&[]));
 }

@@ -2,30 +2,30 @@
 
 [![CI](https://github.com/aminnizamdev/Obex-/actions/workflows/ci.yml/badge.svg)](https://github.com/aminnizamdev/Obex-/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 
-> **A next-generation blockchain protocol implementing verifiable random functions (VRF), RAM-hard proof-of-work, and deterministic consensus mechanisms.**
+> **A next-generation blockchain protocol implementing verifiable random functions (VRF), deterministic consensus, and modular tokenomics with comprehensive testing infrastructure.**
 
-OBEX Alpha is a cutting-edge blockchain implementation featuring cryptographically secure consensus, VRF-based randomness, and a modular architecture designed for high-performance distributed systems. Built with Rust for maximum safety and performance.
+OBEX Alpha is a production-ready blockchain implementation featuring RFC 9381 ECVRF consensus, deterministic header validation, transaction admission control, and sophisticated tokenomics. Built with Rust for maximum safety, performance, and cryptographic security.
 
 ## Features
 
 ### Core Protocol Components
 
-- **VRF-Based Consensus**: RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI implementation
-- **RAM-Hard Proof System**: Memory-intensive participation proofs (512 MiB target)
-- **Cryptographic Security**: Ed25519 signatures with SHA3-256 domain separation
-- **High Performance**: Zero-copy serialization and optimized data structures
-- **Deterministic Consensus**: Reproducible state transitions and ticket ordering
-- **Byzantine Fault Tolerance**: Robust consensus under adversarial conditions
+- **VRF-Based Consensus**: RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI implementation with pluggable verification
+- **Participation Engine**: Memory-intensive proofs with 96 challenges (2^-96 security) and 512 MiB RAM target
+- **Deterministic Headers**: Forkless consensus through equality-based header validation
+- **Transaction Admission**: Fee-based admission with flat/percentage fee structures and access list encoding
+- **Tokenomics Engine**: Emission control with halving periods, escrow, and DRP (Distributed Reward Protocol)
+- **Cryptographic Security**: Ed25519 signatures with domain-tagged SHA3-256 hashing
 
 ### Architecture Highlights
 
-- **Modular Design**: Five specialized engines (α-I through α-T + E2E)
-- **Type Safety**: Comprehensive Rust type system with zero unsafe code
-- **Comprehensive Testing**: 47+ tests with golden byte verification
-- **CI/CD Pipeline**: Automated testing with feature matrix validation
-- **Production Ready**: Frozen consensus rules and deterministic behavior
+- **Modular Design**: Five specialized engines (α-I, α-II, α-III, α-T) plus E2E integration layer
+- **Type Safety**: Comprehensive Rust type system with zero unsafe code and strict error handling
+- **Comprehensive Testing**: 47+ tests including golden byte verification, VRF compliance, and E2E pipeline tests
+- **CI/CD Pipeline**: Automated testing with clippy, rustfmt, feature matrix, and forbidden tag validation
+- **Production Ready**: Frozen consensus rules, deterministic behavior, and comprehensive fuzzing infrastructure
 
 ## Table of Contents
 
@@ -81,11 +81,11 @@ OBEX Alpha implements a sophisticated multi-engine architecture:
 
 | Engine | Purpose | Key Features |
 |--------|---------|--------------|
-| **α-I** | Participation proofs | VRF verification, RAM-hard challenges, Merkle proofs |
-| **α-II** | Block headers | Parent-child linking, slot validation, header v2 format |
-| **α-III** | Transaction admission | Fee validation, ticket processing, state updates |
-| **α-T** | Tokenomics | Reward distribution, system transactions, emission control |
-| **E2E** | Integration | 3-slot pipeline, deterministic ordering, golden tests |
+| **α-I** | Participation Engine | RFC 9381 VRF verification, 96-challenge proofs, Merkle path validation, 512 MiB RAM target |
+| **α-II** | Header Engine | Deterministic header validation, forkless consensus, VDF integration, beacon verification |
+| **α-III** | Admission Engine | Transaction fee calculation, access list encoding, bind value validation, memo support |
+| **α-T** | Tokenomics Engine | Emission scheduling, halving periods, reward distribution, 21M total supply |
+| **E2E** | Integration Layer | 3-slot pipeline testing, settlement/finality/emission, mock provider implementations |
 
 ## Installation
 
@@ -111,11 +111,16 @@ cargo test --workspace
 ### Feature Flags
 
 ```toml
+# obex_primitives features
 [features]
-default = []
-ecvrf_rfc9381 = ["vrf-rfc9381", "sha2"]  # RFC 9381 VRF implementation
+default = ["std"]
 std = []                                  # Standard library support
 alloc = []                               # Allocation support for no_std
+
+# obex_alpha_i features  
+[features]
+default = ["ecvrf_rfc9381"]
+ecvrf_rfc9381 = ["vrf-rfc9381", "sha2"]  # RFC 9381 VRF implementation
 ```
 
 ## Usage
@@ -123,49 +128,145 @@ alloc = []                               # Allocation support for no_std
 ### Basic VRF Operations
 
 ```rust
-use obex_alpha_i::{vrf, VrfPk32};
+use obex_alpha_i::vrf;
 
 // Verify VRF proof using RFC 9381 ECVRF
-let vrf_pk: VrfPk32 = [/* 32-byte Ed25519 public key */];
-let alpha = [/* 32-byte input */];
-let proof = [/* 80-byte VRF proof */];
+let pk_bytes: [u8; 32] = [/* Ed25519 public key */];
+let alpha = b"input_message";
+let proof: [u8; 80] = [/* VRF proof: gamma(32) || c(16) || s(32) */];
 
-match vrf::verify(&vrf_pk, &alpha, &proof) {
-    Ok(output) => println!("VRF output: {:?}", output),
-    Err(e) => eprintln!("VRF verification failed: {}", e),
+match vrf::verify(&pk_bytes, alpha, &proof) {
+    Ok(output) => println!("VRF output: {:02x?}", &output[..16]),
+    Err(e) => eprintln!("VRF verification failed: {:?}", e),
 }
 ```
 
 ### Participation Record Verification
 
 ```rust
-use obex_alpha_i::{verify_partrec, PartRec};
+use obex_alpha_i::{ObexPartRec, ChallengeOpen, MerklePathLite};
 
-// Verify participation record
-let parent_id = [/* parent block hash */];
-let slot = 12345u64;
-let y_prev = [/* previous VRF output */];
-let partrec = PartRec { /* participation record */ };
+// Create participation record
+let partrec = ObexPartRec {
+    vrf_pk: [/* 32-byte Ed25519 public key */],
+    vrf_proof: [/* 80-byte VRF proof */],
+    challenges: vec![
+        ChallengeOpen {
+            index: 12345,
+            value: [/* 32-byte challenge value */],
+            path: MerklePathLite { path: vec![[0u8; 32]; 20] },
+        },
+        // ... up to 96 challenges
+    ],
+};
 
-match verify_partrec(&parent_id, slot, &y_prev, &partrec) {
-    Ok(()) => println!("Participation record valid"),
-    Err(e) => eprintln!("Verification failed: {:?}", e),
-}
+// Verification would be done through the participation engine
+println!("Participation record with {} challenges", partrec.challenges.len());
 ```
 
-### Header Validation
+### Header Operations
 
 ```rust
-use obex_alpha_ii::{verify_header, HeaderV2};
+use obex_alpha_ii::{Header, obex_header_id};
+use obex_primitives::Hash256;
 
-// Validate block header
-let header = HeaderV2 { /* header data */ };
-let parent_header = HeaderV2 { /* parent header */ };
+// Create header
+let header = Header {
+    parent_id: Hash256([/* parent block hash */]),
+    slot: 12345,
+    version: 2,
+    vdf_input: [/* VDF input */],
+    vdf_proof: vec![/* VDF proof */],
+    vdf_output: [/* VDF output */],
+    ticket_root: Hash256([/* ticket Merkle root */]),
+    part_root: Hash256([/* participation root */]),
+    tx_root: Hash256([/* transaction root */]),
+};
 
-match verify_header(&header, Some(&parent_header)) {
-    Ok(()) => println!("Header valid"),
-    Err(e) => eprintln!("Header validation failed: {:?}", e),
-}
+// Compute canonical header ID
+let header_id = obex_header_id(&header);
+println!("Header ID: {:02x?}", &header_id[..8]);
+```
+
+### Transaction Fee Calculation
+
+```rust
+use obex_alpha_iii::{fee_int_uobx, TxBodyV1, AccessList};
+
+// Calculate transaction fee
+let amount_uobx = 1_000_000; // 1 OBX in micro-OBX
+let fee = fee_int_uobx(amount_uobx);
+println!("Transaction fee: {} μOBX", fee);
+
+// Create transaction body
+let tx_body = TxBodyV1 {
+    sender: [/* 32-byte sender address */],
+    recipient: [/* 32-byte recipient address */],
+    nonce: 42,
+    amount_uobx,
+    fee_uobx: fee,
+    bind_1: [0u8; 32],
+    bind_2: [0u8; 32],
+    access_list: AccessList {
+        read_accounts: vec![[/* account addresses */]],
+        write_accounts: vec![[/* account addresses */]],
+    },
+    memo: b"payment memo".to_vec(),
+};
+```
+
+### Tokenomics Operations
+
+```rust
+use obex_alpha_t::{EmissionState, on_slot_emission, period_index};
+
+// Calculate emission for a slot
+let slot = 1_000_000;
+let period = period_index(slot);
+let mut emission_state = EmissionState { total_emitted_uobx: 0 };
+
+let emission = on_slot_emission(slot, &mut emission_state);
+println!("Slot {} (period {}): {} μOBX emitted", slot, period, emission);
+println!("Total emitted: {} μOBX", emission_state.total_emitted_uobx);
+```
+
+## Examples and Benchmarks
+
+OBEX Alpha includes comprehensive examples and performance testing infrastructure:
+
+### Examples
+
+- **`ecvrf_implementation.rs`**: Complete VRF implementation with real cryptography
+- **`ecvrf_verification.rs`**: Verification-only VRF implementation for validators
+- **`vrf_r255_api.rs`**: Pure Rust vrf-r255 backend integration
+
+### Benchmarks
+
+Performance benchmarks using Criterion.rs:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Benchmark specific operations
+cargo bench merkle_verify
+cargo bench vrf_verify
+cargo bench challenge_derivation
+```
+
+### Fuzzing Infrastructure
+
+Comprehensive fuzzing with libfuzzer-sys:
+
+```bash
+# Install cargo-fuzz
+cargo install cargo-fuzz
+
+# Run registration decoding fuzz tests
+cargo fuzz run registration_decode
+
+# Run registration verification fuzz tests  
+cargo fuzz run registration_verify
 ```
 
 ## Testing
@@ -214,32 +315,58 @@ cargo bench
 ### Core Types
 
 ```rust
-// Cryptographic primitives
+// Cryptographic primitives (obex_primitives)
 pub type Hash256 = [u8; 32];           // SHA3-256 output
-pub type VrfPk32 = [u8; 32];           // Ed25519 VRF public key
+pub type Pk32 = [u8; 32];              // Ed25519 public key
 pub type Sig64 = [u8; 64];             // Ed25519 signature
 
-// Consensus constants
+// Participation engine constants (obex_alpha_i)
 pub const CHALLENGES_Q: usize = 96;     // Challenge count (2^-96 security)
-pub const MEM_MIB: usize = 512;         // RAM target per prover
-pub const MAX_PARTREC_SIZE: usize = 600_000; // DoS protection limit
+pub const MEM_MIB: usize = 512;         // RAM target per prover (512 MiB)
+pub const N_LABELS: usize = 134_217_728; // 2^27 labels in dataset
+pub const PASSES: usize = 3;            // Argon2 passes
+
+// Header engine constants (obex_alpha_ii)
+pub const MAX_PI_LEN: usize = 1024;     // Max VDF proof length
+pub const MAX_ELL_LEN: usize = 64;      // Max VDF output length
+
+// Admission engine constants (obex_alpha_iii)
+pub const MIN_TX_UOBX: u64 = 1;         // Minimum transaction amount
+pub const FLAT_SWITCH_UOBX: u64 = 1_000_000; // Fee structure switch point
+pub const FLAT_FEE_UOBX: u64 = 1000;    // Flat fee for small transactions
+
+// Tokenomics constants (obex_alpha_t)
+pub const TOTAL_SUPPLY_UOBX: u64 = 21_000_000_000_000; // 21M OBX total
+pub const SLOTS_PER_PROTOCOL_YEAR: u64 = 31_557_600;   // ~1 year in slots
+pub const LAST_EMISSION_SLOT: u64 = 1_325_419_200;     // Final emission slot
 ```
 
 ### Key Functions
 
 ```rust
-// VRF operations
-pub fn verify(pk: &VrfPk32, alpha: &[u8; 32], proof: &[u8; 80]) -> Result<[u8; 64], VrfError>;
+// VRF operations (obex_alpha_i::vrf)
+pub fn verify(pk: &[u8; 32], alpha: &[u8], proof: &[u8; 80]) -> Result<[u8; 64], VrfError>;
+pub fn verify_msg_tai(pk: &[u8; 32], alpha: &[u8], proof: &[u8; 80]) -> Result<[u8; 64], VrfError>;
 
-// Participation verification
-pub fn verify_partrec(parent_id: &Hash256, slot: u64, y_prev: &Hash256, rec: &PartRec) -> Result<(), VerifyErr>;
+// Header operations (obex_alpha_ii)
+pub fn obex_header_id(header: &Header) -> Hash256;
 
-// Header validation
-pub fn verify_header(header: &HeaderV2, parent: Option<&HeaderV2>) -> Result<(), HeaderErr>;
+// Transaction operations (obex_alpha_iii)
+pub fn fee_int_uobx(amount_uobx: u64) -> u64;
+pub fn encode_access(access_list: &AccessList) -> Vec<u8>;
+pub fn canonical_tx_bytes(tx_body: &TxBodyV1) -> Vec<u8>;
 
-// Merkle operations
+// Tokenomics operations (obex_alpha_t)
+pub fn period_index(slot: u64) -> u32;
+pub fn reward_den_for_period(period: u32) -> u64;
+pub fn on_slot_emission(slot: u64, state: &mut EmissionState) -> u64;
+
+// Cryptographic primitives (obex_primitives)
+pub fn h_tag(tag: &[u8], data: &[u8]) -> Hash256;
+pub fn sha3_256(data: &[u8]) -> Hash256;
+pub fn merkle_leaf(data: &[u8]) -> Hash256;
+pub fn merkle_node(left: &Hash256, right: &Hash256) -> Hash256;
 pub fn merkle_root(leaves: &[Hash256]) -> Hash256;
-pub fn merkle_verify_leaf(root: &Hash256, index: usize, leaf: &Hash256, path: &[Hash256]) -> bool;
 ```
 
 ## Contributing
@@ -333,15 +460,5 @@ This project includes dependencies with their own licenses:
 - **Cryptography Researchers**: For foundational security research
 - **Open Source Contributors**: For reviews, testing, and improvements
 
-## Support
-
-- **Documentation**: [API Docs](https://docs.rs/obex-alpha)
-- **Issues**: [GitHub Issues](https://github.com/aminnizamdev/Obex-/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/aminnizamdev/Obex-/discussions)
-- **Email**: engineering@obex.example
-
----
-
-**Built by the OBEX Labs team**
 
 *OBEX Alpha v1.0.0 - Production-ready blockchain protocol with VRF consensus*

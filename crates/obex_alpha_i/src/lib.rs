@@ -21,8 +21,8 @@
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use obex_primitives::{
-    consensus, ct_eq_hash, le_bytes, merkle_root, merkle_verify_leaf, u64_from_le, Hash256,
-    Pk32, Sig64,
+    consensus, ct_eq_hash, le_bytes, merkle_root, merkle_verify_leaf, u64_from_le, Hash256, Pk32,
+    Sig64,
 };
 use thiserror::Error;
 

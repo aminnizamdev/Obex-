@@ -12,19 +12,37 @@ pub type Hash256 = [u8; 32];
 
 pub const OBEX_SHA3_TAGS: &[&str] = &[
     // shared Merkle / part
-    "merkle.leaf", "merkle.node", "merkle.empty", "part.leaf",
+    "merkle.leaf",
+    "merkle.node",
+    "merkle.empty",
+    "part.leaf",
     // α-I (Obex)
-    "obex.alpha", "obex.partrec", "obex.seed",
-    "obex.l0", "obex.lbl", "obex.idx", "obex.chal", "obex.vrfy",
+    "obex.alpha",
+    "obex.partrec",
+    "obex.seed",
+    "obex.l0",
+    "obex.lbl",
+    "obex.idx",
+    "obex.chal",
+    "obex.vrfy",
     // α-II (header)
-    "obex.header.id", "slot.seed",
+    "obex.header.id",
+    "slot.seed",
     // α-III (admission/tx)
-    "tx.access", "tx.body.v1", "tx.id", "tx.commit", "tx.sig",
-    "ticket.id", "ticket.leaf",
+    "tx.access",
+    "tx.body.v1",
+    "tx.id",
+    "tx.commit",
+    "tx.sig",
+    "ticket.id",
+    "ticket.leaf",
     // α-T (tokenomics/system tx/rewards)
-    "sys.tx", "reward.draw", "reward.rank",
+    "sys.tx",
+    "reward.draw",
+    "reward.rank",
     // VDF canonical (if your adapter uses them)
-    "vdf.ycore.canon", "vdf.edge"
+    "vdf.ycore.canon",
+    "vdf.edge",
 ];
 
 pub const MAX_PARTREC_SIZE: usize = 600_000;
@@ -57,31 +75,31 @@ pub fn sha3_256(input: &[u8]) -> Hash256 {
 }
 
 // Binary Merkle with duplicate-last
-#[inline] 
-pub fn merkle_leaf(payload: &[u8]) -> Hash256 { 
-    h_tag("merkle.leaf", &[payload]) 
+#[inline]
+pub fn merkle_leaf(payload: &[u8]) -> Hash256 {
+    h_tag("merkle.leaf", &[payload])
 }
 
 #[inline]
 pub fn merkle_node(l: &Hash256, r: &Hash256) -> Hash256 {
-    let mut cat = [0u8; 64]; 
-    cat[..32].copy_from_slice(l); 
+    let mut cat = [0u8; 64];
+    cat[..32].copy_from_slice(l);
     cat[32..].copy_from_slice(r);
     h_tag("merkle.node", &[&cat])
 }
 
 pub fn merkle_root(leaves_payload: &[Vec<u8>]) -> Hash256 {
-    if leaves_payload.is_empty() { 
-        return h_tag("merkle.empty", &[]); 
+    if leaves_payload.is_empty() {
+        return h_tag("merkle.empty", &[]);
     }
     let mut lvl: Vec<Hash256> = leaves_payload.iter().map(|p| merkle_leaf(p)).collect();
     while lvl.len() > 1 {
-        if lvl.len() & 1 == 1 { 
-            lvl.push(*lvl.last().unwrap()); 
+        if lvl.len() & 1 == 1 {
+            lvl.push(*lvl.last().unwrap());
         }
-        let mut nxt = Vec::with_capacity(lvl.len()/2);
-        for i in (0..lvl.len()).step_by(2) { 
-            nxt.push(merkle_node(&lvl[i], &lvl[i+1])); 
+        let mut nxt = Vec::with_capacity(lvl.len() / 2);
+        for i in (0..lvl.len()).step_by(2) {
+            nxt.push(merkle_node(&lvl[i], &lvl[i + 1]));
         }
         lvl = nxt;
     }

@@ -227,10 +227,7 @@ pub fn admit_single(
 
     let xid = txid(tx);
     let rec = TicketRecord {
-        ticket_id: consensus::h_tag(
-            "ticket.id",
-            &[&xid, &le_bytes::<8>(u128::from(s_now))],
-        ),
+        ticket_id: consensus::h_tag("ticket.id", &[&xid, &le_bytes::<8>(u128::from(s_now))]),
         txid: xid,
         sender: tx.sender,
         nonce: tx.nonce,

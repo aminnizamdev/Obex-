@@ -1,5 +1,5 @@
 //! 3-slot end-to-end harness test
-//! 
+//!
 //! This test implements the full protocol pipeline as described in solutions B7:
 //! - s−1 settlement: produces α-I proofs targeting s
 //! - s finality: builds P_s/part_root_s, admits txs → ticket_root_s, recomputes txroot_{s−1}, builds Header s; validates
@@ -13,7 +13,7 @@ use obex_alpha_ii::{
     PartRootProvider, TicketRootProvider, TxRootProvider, OBEX_ALPHA_II_VERSION,
 };
 use obex_alpha_iii::{
-    admit_slot_canonical, AlphaIIIState, TicketRecord, TxBodyV1, fee_int_uobx, AccessList, Sig,
+    admit_slot_canonical, fee_int_uobx, AccessList, AlphaIIIState, Sig, TicketRecord, TxBodyV1,
 };
 use obex_primitives::{constants, h_tag, le_bytes, merkle_root, Hash256, Pk32};
 use std::collections::HashMap;
@@ -154,7 +154,11 @@ fn create_mock_tx_bodies(slot: u64, y_bind: &Hash256, count: usize) -> Vec<TxBod
 }
 
 /// Create mock α-I participation records
-fn create_mock_part_records(slot: u64, y_edge_prev: &Hash256, part_pks: &[Pk32]) -> Vec<ObexPartRec> {
+fn create_mock_part_records(
+    slot: u64,
+    y_edge_prev: &Hash256,
+    part_pks: &[Pk32],
+) -> Vec<ObexPartRec> {
     part_pks
         .iter()
         .enumerate()
@@ -162,11 +166,16 @@ fn create_mock_part_records(slot: u64, y_edge_prev: &Hash256, part_pks: &[Pk32])
             let vrf_pk = [i as u8; 32];
             let alpha = h_tag(
                 constants::TAG_ALPHA,
-                &[&[0u8; 32], &le_bytes::<8>(slot.into()), y_edge_prev, &[i as u8; 32]],
+                &[
+                    &[0u8; 32],
+                    &le_bytes::<8>(slot.into()),
+                    y_edge_prev,
+                    &[i as u8; 32],
+                ],
             );
             let vrf_y = vec![i as u8; 64];
             let seed = h_tag(constants::TAG_SEED, &[y_edge_prev, pk, &vrf_y]);
-            
+
             ObexPartRec {
                 version: obex_alpha_i::OBEX_ALPHA_I_VERSION,
                 slot,
@@ -191,18 +200,18 @@ fn three_slot_end_to_end_pipeline() {
     let part_pks: Vec<Pk32> = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
     let mut providers = MockProviders::new(part_pks.clone());
     let beacon = MockBeacon;
-    
+
     let parent = mk_parent();
     let mut h_prev = parent;
 
     // Process 3 slots in the pipeline
     for slot in 1..=3u64 {
         println!("Processing slot {}", slot);
-        
+
         // === s−1 settlement: produces α-I proofs targeting s ===
         let y_edge_prev = h_prev.vdf_y_edge;
         let part_records = create_mock_part_records(slot, &y_edge_prev, &part_pks);
-        
+
         // Verify α-I proofs (mock verification)
         for record in &part_records {
             // In a real implementation, this would call obex_alpha_i::verify
@@ -212,30 +221,31 @@ fn three_slot_end_to_end_pipeline() {
         }
 
         // === s finality: builds P_s/part_root_s, admits txs → ticket_root_s, recomputes txroot_{s−1}, builds Header s ===
-        
+
         // Create mock transactions for this slot
         let tx_bodies = create_mock_tx_bodies(slot, &y_edge_prev, 2);
-        
+
         // Run α-III admission process using actual admission logic
         let mut alpha_iii_state = AlphaIIIState::default();
-        
+
         // Set up initial balances for senders
         for tx_body in &tx_bodies {
             alpha_iii_state.spendable_u.insert(tx_body.sender, 10_000);
         }
-        
+
         // Create transaction signatures (mock for testing)
         let tx_sigs: Vec<(TxBodyV1, Sig)> = tx_bodies
             .into_iter()
             .map(|tx| (tx, [0u8; 64])) // Mock signature
             .collect();
-        
+
         // Admit transactions for this slot - this will fail due to bad signatures
         // but demonstrates the proper integration
-        let admitted_tickets = admit_slot_canonical(slot, &y_edge_prev, &tx_sigs, &mut alpha_iii_state);
-        
+        let admitted_tickets =
+            admit_slot_canonical(slot, &y_edge_prev, &tx_sigs, &mut alpha_iii_state);
+
         providers.set_ticket_records(slot, admitted_tickets.clone());
-        
+
         // Build VDF inputs for this slot
         let seed_commit = h_tag(
             constants::TAG_SLOT_SEED,
@@ -244,7 +254,7 @@ fn three_slot_end_to_end_pipeline() {
         #[allow(clippy::cast_possible_truncation)]
         let y_core = h_tag(constants::TAG_VDF_YCORE, &[&[slot as u8; 32]]);
         let y_edge = h_tag(constants::TAG_VDF_EDGE, &[&y_core]);
-        
+
         // Build header for slot s
         let header_s = build_header(
             &h_prev,
@@ -254,7 +264,7 @@ fn three_slot_end_to_end_pipeline() {
             &providers,
             OBEX_ALPHA_II_VERSION,
         );
-        
+
         // Validate header s
         assert!(validate_header(
             &header_s,
@@ -268,7 +278,7 @@ fn three_slot_end_to_end_pipeline() {
         .is_ok());
 
         // === s settlement: simplified α-T integration ===
-        
+
         // For this test, we'll create a simple mock txroot based on admitted tickets
         // In a real implementation, this would involve complex α-T settlement logic
         let tx_leaves: Vec<Vec<u8>> = admitted_tickets
@@ -280,40 +290,53 @@ fn three_slot_end_to_end_pipeline() {
                 payload
             })
             .collect();
-        
+
         let txroot_s = if tx_leaves.is_empty() {
             empty_root()
         } else {
             merkle_root(&tx_leaves)
         };
         providers.set_tx_root(slot, txroot_s);
-        
-        println!("Slot {} processed: {} tickets admitted", slot, admitted_tickets.len());
-        
+
+        println!(
+            "Slot {} processed: {} tickets admitted",
+            slot,
+            admitted_tickets.len()
+        );
+
         // Update h_prev for next iteration
         h_prev = header_s;
     }
 
     // === s+1 finality: builds Header s+1 committing txroot_s; validates ===
-    
+
     let final_slot = 4u64;
     let seed_commit_final = h_tag(
         constants::TAG_SLOT_SEED,
-        &[&obex_header_id(&h_prev), &le_bytes::<8>(u128::from(final_slot))],
+        &[
+            &obex_header_id(&h_prev),
+            &le_bytes::<8>(u128::from(final_slot)),
+        ],
     );
     #[allow(clippy::cast_possible_truncation)]
     let y_core_final = h_tag(constants::TAG_VDF_YCORE, &[&[final_slot as u8; 32]]);
     let y_edge_final = h_tag(constants::TAG_VDF_EDGE, &[&y_core_final]);
-    
+
     let header_final = build_header(
         &h_prev,
-        (seed_commit_final, y_core_final, y_edge_final, vec![], vec![]),
+        (
+            seed_commit_final,
+            y_core_final,
+            y_edge_final,
+            vec![],
+            vec![],
+        ),
         &providers,
         &providers,
         &providers,
         OBEX_ALPHA_II_VERSION,
     );
-    
+
     // Validate final header
     assert!(validate_header(
         &header_final,
@@ -327,11 +350,11 @@ fn three_slot_end_to_end_pipeline() {
     .is_ok());
 
     // === Assert only one valid header for the fixed (parent, s) ===
-    
+
     // Test that changing any component breaks validation
     let mut invalid_header = header_final.clone();
     invalid_header.ticket_root[0] ^= 1;
-    
+
     assert!(validate_header(
         &invalid_header,
         &h_prev,
@@ -342,35 +365,47 @@ fn three_slot_end_to_end_pipeline() {
         OBEX_ALPHA_II_VERSION
     )
     .is_err());
-    
+
     // Verify determinism: rebuilding with same inputs produces same header
     let header_final_2 = build_header(
         &h_prev,
-        (seed_commit_final, y_core_final, y_edge_final, vec![], vec![]),
+        (
+            seed_commit_final,
+            y_core_final,
+            y_edge_final,
+            vec![],
+            vec![],
+        ),
         &providers,
         &providers,
         &providers,
         OBEX_ALPHA_II_VERSION,
     );
-    
-    assert_eq!(obex_header_id(&header_final), obex_header_id(&header_final_2));
-    
+
+    assert_eq!(
+        obex_header_id(&header_final),
+        obex_header_id(&header_final_2)
+    );
+
     println!("3-slot end-to-end pipeline completed successfully!");
-    println!("Final header ID: {:?}", hex::encode(obex_header_id(&header_final)));
+    println!(
+        "Final header ID: {:?}",
+        hex::encode(obex_header_id(&header_final))
+    );
 }
 
 #[test]
 fn pipeline_determinism_across_runs() {
     // Run the pipeline twice with identical inputs and verify deterministic results
     let part_pks: Vec<Pk32> = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
-    
+
     let run_pipeline = || {
         let providers = MockProviders::new(part_pks.clone());
         let _beacon = MockBeacon;
         let parent = mk_parent();
         let mut h_prev = parent;
         let mut header_ids = Vec::new();
-        
+
         for slot in 1..=3u64 {
             let seed_commit = h_tag(
                 constants::TAG_SLOT_SEED,
@@ -379,7 +414,7 @@ fn pipeline_determinism_across_runs() {
             #[allow(clippy::cast_possible_truncation)]
             let y_core = h_tag(constants::TAG_VDF_YCORE, &[&[slot as u8; 32]]);
             let y_edge = h_tag(constants::TAG_VDF_EDGE, &[&y_core]);
-            
+
             let header = build_header(
                 &h_prev,
                 (seed_commit, y_core, y_edge, vec![], vec![]),
@@ -388,20 +423,23 @@ fn pipeline_determinism_across_runs() {
                 &providers,
                 OBEX_ALPHA_II_VERSION,
             );
-            
+
             header_ids.push(obex_header_id(&header));
             h_prev = header;
         }
-        
+
         header_ids
     };
-    
+
     let ids_run1 = run_pipeline();
     let ids_run2 = run_pipeline();
-    
-    assert_eq!(ids_run1, ids_run2, "Pipeline must be deterministic across runs");
+
+    assert_eq!(
+        ids_run1, ids_run2,
+        "Pipeline must be deterministic across runs"
+    );
     assert_eq!(ids_run1.len(), 3, "Should have processed 3 slots");
-    
+
     // Verify all header IDs are unique
     for i in 0..ids_run1.len() {
         for j in (i + 1)..ids_run1.len() {

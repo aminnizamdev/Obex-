@@ -470,7 +470,7 @@ pub fn canonical_sys_tx_order(sys_txs: Vec<SysTx>, y_edge_s: &Hash256) -> Vec<Sy
     let (mut reward_payouts, mut others): (Vec<_>, Vec<_>) = sys_txs
         .into_iter()
         .partition(|tx| matches!(tx.kind, SysTxKind::RewardPayout));
-    
+
     // Sort non-REWARD_PAYOUT transactions by kind priority
     others.sort_by_key(|tx| match tx.kind {
         SysTxKind::EscrowCredit => 0,
@@ -480,14 +480,14 @@ pub fn canonical_sys_tx_order(sys_txs: Vec<SysTx>, y_edge_s: &Hash256) -> Vec<Sy
         SysTxKind::Burn => 4,
         SysTxKind::RewardPayout => 5, // Should not happen due to partition
     });
-    
+
     // Sort REWARD_PAYOUT transactions by reward_rank
     reward_payouts.sort_by(|a, b| {
         let rank_a = reward_rank(y_edge_s, &a.pk);
         let rank_b = reward_rank(y_edge_s, &b.pk);
         rank_a.cmp(&rank_b)
     });
-    
+
     // Combine: others first, then reward payouts
     others.extend(reward_payouts);
     others
@@ -534,21 +534,56 @@ mod tests {
         let pk2 = [2u8; 32];
         let pk3 = [3u8; 32];
         let y_edge = [0u8; 32];
-        
+
         // Create system transactions in random order
         let sys_txs = vec![
-            SysTx { kind: SysTxKind::Burn, slot: 100, pk: pk1, amt: 50 },
-            SysTx { kind: SysTxKind::RewardPayout, slot: 100, pk: pk2, amt: 200 },
-            SysTx { kind: SysTxKind::EscrowCredit, slot: 100, pk: pk3, amt: 100 },
-            SysTx { kind: SysTxKind::VerifierCredit, slot: 100, pk: pk1, amt: 75 },
-            SysTx { kind: SysTxKind::RewardPayout, slot: 100, pk: pk1, amt: 150 },
-            SysTx { kind: SysTxKind::EmissionCredit, slot: 100, pk: pk2, amt: 300 },
-            SysTx { kind: SysTxKind::TreasuryCredit, slot: 100, pk: pk3, amt: 25 },
+            SysTx {
+                kind: SysTxKind::Burn,
+                slot: 100,
+                pk: pk1,
+                amt: 50,
+            },
+            SysTx {
+                kind: SysTxKind::RewardPayout,
+                slot: 100,
+                pk: pk2,
+                amt: 200,
+            },
+            SysTx {
+                kind: SysTxKind::EscrowCredit,
+                slot: 100,
+                pk: pk3,
+                amt: 100,
+            },
+            SysTx {
+                kind: SysTxKind::VerifierCredit,
+                slot: 100,
+                pk: pk1,
+                amt: 75,
+            },
+            SysTx {
+                kind: SysTxKind::RewardPayout,
+                slot: 100,
+                pk: pk1,
+                amt: 150,
+            },
+            SysTx {
+                kind: SysTxKind::EmissionCredit,
+                slot: 100,
+                pk: pk2,
+                amt: 300,
+            },
+            SysTx {
+                kind: SysTxKind::TreasuryCredit,
+                slot: 100,
+                pk: pk3,
+                amt: 25,
+            },
         ];
-        
+
         // Apply canonical ordering
         let ordered = canonical_sys_tx_order(sys_txs, &y_edge);
-        
+
         // Verify the order: EscrowCredit, EmissionCredit, VerifierCredit, TreasuryCredit, Burn, RewardPayout
         assert_eq!(ordered[0].kind, SysTxKind::EscrowCredit);
         assert_eq!(ordered[1].kind, SysTxKind::EmissionCredit);
@@ -557,11 +592,11 @@ mod tests {
         assert_eq!(ordered[4].kind, SysTxKind::Burn);
         assert_eq!(ordered[5].kind, SysTxKind::RewardPayout);
         assert_eq!(ordered[6].kind, SysTxKind::RewardPayout);
-        
+
         // Verify that RewardPayout transactions are sorted by reward_rank
         let rank1 = reward_rank(&y_edge, &pk1);
         let rank2 = reward_rank(&y_edge, &pk2);
-        
+
         if rank1 < rank2 {
             assert_eq!(ordered[5].pk, pk1);
             assert_eq!(ordered[6].pk, pk2);

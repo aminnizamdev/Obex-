@@ -41,8 +41,8 @@ pub type Pk32 = [u8; 32];
 /// 64-byte signature (Ed25519 canonical encoding).
 pub type Sig64 = [u8; 64];
 
-pub mod constants;
 pub mod consensus;
+pub mod constants;
 
 /// Convert an unsigned integer to fixed-width little-endian bytes.
 ///

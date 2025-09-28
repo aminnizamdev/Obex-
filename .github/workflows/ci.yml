@@ -23,19 +23,36 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic -D clippy::nursery -D clippy::cargo | cat
       - name: test
         run: cargo test --all --all-targets ${{ matrix.features }} | cat
+      - name: workspace test
+        run: cargo test --workspace --release ${{ matrix.features }} | cat
       - name: golden tests gate
         run: |
           set -e
           echo "Running golden tests gate..."
-          # α-I golden tests
+          # α-I golden tests (original)
           cargo test --package obex_alpha_i golden_partrec_accept_and_roundtrip ${{ matrix.features }} | cat
           cargo test --package obex_alpha_i golden_partrec_flipbit_precise_errors ${{ matrix.features }} | cat
-          # α-II golden tests  
+          # α-I golden tests (comprehensive)
+          cargo test --package obex_alpha_i golden_partrec_comprehensive_flipbit_failures ${{ matrix.features }} | cat
+          cargo test --package obex_alpha_i golden_partrec_challenges_q_enforcement ${{ matrix.features }} | cat
+          cargo test --package obex_alpha_i golden_partrec_canonical_byte_image ${{ matrix.features }} | cat
+          # α-II golden tests (original)
           cargo test --package obex_alpha_ii golden_header_parent_and_child_roundtrip | cat
           cargo test --package obex_alpha_ii golden_header_child_id_matches_hex | cat
           cargo test --package obex_alpha_ii golden_header_flipbit_changes_id_or_decode | cat
           cargo test --package obex_alpha_ii golden_header_field_flip_specific_errors | cat
+          # α-II golden tests (comprehensive)
+          cargo test --package obex_alpha_ii golden_header_comprehensive_flipbit_failures | cat
+          cargo test --package obex_alpha_ii golden_header_vdf_proof_flipbit_failures | cat
+          cargo test --package obex_alpha_ii golden_header_canonical_byte_image_stability | cat
           echo "Golden tests gate passed!"
+      - name: end-to-end pipeline tests
+        run: |
+          set -e
+          echo "Running end-to-end pipeline tests..."
+          cargo test --package e2e three_slot_end_to_end_pipeline | cat
+          cargo test --package e2e pipeline_determinism_across_runs | cat
+          echo "End-to-end pipeline tests passed!"
       - name: vrf feature tests
         if: matrix.features != ''
         run: |

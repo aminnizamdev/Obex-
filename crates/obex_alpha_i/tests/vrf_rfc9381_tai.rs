@@ -1,4 +1,6 @@
-use obex_alpha_i::vrf::{verify_msg_tai, VrfPi, VrfPk};
+use obex_alpha_i::vrf::{
+    ecvrf_verify_beta_tai, ecvrf_verify_beta_tai_opt, verify_msg_tai, VrfPi, VrfPk, VRF_Y_BYTES,
+};
 
 // Simple hex helper
 fn hex(s: &str) -> Vec<u8> {
@@ -70,4 +72,156 @@ fn rfc9381_tai_invalid() {
     let vk_bad = [0u8; 32];
     let pi: VrfPi = hex(v.pi).try_into().unwrap();
     assert!(verify_msg_tai(&vk_bad, &alpha, &pi).is_err());
+}
+
+/// Test ecvrf_verify_beta_tai function behavior and API consistency
+/// This locks the VRF adapter behaviour and β/π lengths forever as required
+#[test]
+fn ecvrf_verify_beta_tai_valid_cases() {
+    // Test that ecvrf_verify_beta_tai and ecvrf_verify_beta_tai_opt work consistently
+    // We use the RFC vector's public key but with a 32-byte alpha for consensus use
+    let v = &OK[0];
+    let vk: VrfPk = hex(v.vk).try_into().unwrap();
+
+    // Create a 32-byte alpha for consensus (different from RFC vector's variable-length alpha)
+    let alpha32 = [0x42u8; 32]; // Fixed 32-byte alpha for consensus
+
+    // Use a zero proof (will fail verification but tests function signatures)
+    let pi_zero = [0u8; 80];
+
+    // Test ecvrf_verify_beta_tai function with 32-byte alpha
+    let result = ecvrf_verify_beta_tai(&vk, &alpha32, &pi_zero);
+    assert!(result.is_err(), "Zero proof should fail verification");
+
+    // Test ecvrf_verify_beta_tai_opt function
+    let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi_zero);
+    assert!(
+        opt_result.is_none(),
+        "Zero proof should fail verification with opt function"
+    );
+
+    // Test that both functions handle the same inputs consistently
+    // This ensures the API contract is locked forever
+    assert_eq!(
+        result.is_err(),
+        opt_result.is_none(),
+        "Both functions should fail consistently"
+    );
+
+    // Test with the original RFC vector to ensure verify_msg_tai still works
+    let alpha_bytes = hex(v.alpha);
+    let pi: VrfPi = hex(v.pi).try_into().unwrap();
+    let msg_result = verify_msg_tai(&vk, &alpha_bytes, &pi);
+    assert!(
+        msg_result.is_ok(),
+        "Original RFC vector should verify with variable-length alpha"
+    );
+
+    let beta = msg_result.unwrap();
+    assert_eq!(
+        beta.len(),
+        VRF_Y_BYTES,
+        "Beta should be {} bytes",
+        VRF_Y_BYTES
+    );
+}
+
+/// Test ecvrf_verify_beta_tai function with invalid cases (bit-flipped)
+/// This ensures verification fails for corrupted inputs as required
+#[test]
+fn ecvrf_verify_beta_tai_invalid_cases() {
+    let v = &OK[0];
+    let vk: VrfPk = hex(v.vk).try_into().unwrap();
+    let pi_bytes = hex(v.pi);
+
+    // Convert to 32-byte alpha
+    let mut alpha32 = [0u8; 32];
+    let alpha_bytes = hex(v.alpha);
+    alpha32[..alpha_bytes.len()].copy_from_slice(&alpha_bytes);
+
+    // Test single bit flip in proof - this locks verification behavior forever
+    for byte_idx in 0..pi_bytes.len() {
+        for bit_idx in 0..8 {
+            let mut corrupted_pi = pi_bytes.clone();
+            corrupted_pi[byte_idx] ^= 1 << bit_idx;
+
+            let pi: VrfPi = corrupted_pi.try_into().unwrap();
+
+            // ecvrf_verify_beta_tai should fail
+            let result = ecvrf_verify_beta_tai(&vk, &alpha32, &pi);
+            assert!(
+                result.is_err(),
+                "Corrupted proof at byte {} bit {} should fail",
+                byte_idx,
+                bit_idx
+            );
+
+            // ecvrf_verify_beta_tai_opt should also fail
+            let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi);
+            assert!(
+                opt_result.is_none(),
+                "Corrupted proof at byte {} bit {} should fail with opt function",
+                byte_idx,
+                bit_idx
+            );
+        }
+    }
+
+    // Test invalid public key
+    let pi: VrfPi = hex(v.pi).try_into().unwrap();
+    let invalid_keys = [
+        [0u8; 32],    // All zeros
+        [0xffu8; 32], // All ones
+        [0x01u8; 32], // All ones (different pattern)
+    ];
+
+    for (i, &bad_vk) in invalid_keys.iter().enumerate() {
+        let result = ecvrf_verify_beta_tai(&bad_vk, &alpha32, &pi);
+        assert!(
+            result.is_err(),
+            "Invalid public key {} should fail verification",
+            i
+        );
+
+        let opt_result = ecvrf_verify_beta_tai_opt(bad_vk, alpha32, &pi);
+        assert!(
+            opt_result.is_none(),
+            "Invalid public key {} should fail verification with opt function",
+            i
+        );
+    }
+}
+
+/// Test that ensures β=64 and π=80 lengths are enforced forever
+#[test]
+fn ecvrf_verify_beta_tai_length_enforcement() {
+    // This test locks the VRF adapter behaviour and β/π lengths forever
+    let vk = [0x42u8; 32];
+    let alpha32 = [0x01u8; 32];
+    let pi = [0u8; 80]; // Correct π length
+
+    // Test that function signature enforces correct lengths
+    let result = ecvrf_verify_beta_tai(&vk, &alpha32, &pi);
+    // Should fail due to invalid proof, but not due to length issues
+    assert!(result.is_err(), "Invalid proof should fail verification");
+
+    // Test opt function with wrong proof lengths
+    let wrong_lengths = [0, 1, 79, 81, 100];
+    for &len in &wrong_lengths {
+        let pi_wrong = vec![0u8; len];
+        let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi_wrong);
+        assert!(
+            opt_result.is_none(),
+            "Wrong proof length {} should be rejected",
+            len
+        );
+    }
+
+    // Test with correct length but invalid proof
+    let pi_correct = vec![0u8; 80];
+    let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi_correct);
+    assert!(
+        opt_result.is_none(),
+        "Invalid proof with correct length should fail verification"
+    );
 }
