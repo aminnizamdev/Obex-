@@ -29,6 +29,9 @@ jobs:
   fuzz-nightly:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    env:
+      CC: clang
+      CXX: clang++
     steps:
       - uses: actions/checkout@v4
       - name: Use nightly toolchain
@@ -36,11 +39,11 @@ jobs:
       - name: Install LLVM/Clang for cargo-fuzz
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm
+          sudo apt-get install -y clang llvm llvm-dev libclang-dev
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
       - name: Fuzz build
         run: |
           cd fuzz
-          cargo +nightly fuzz build
+          cargo +nightly fuzz build --sanitizer none
 
