@@ -31,10 +31,14 @@ jobs:
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
-      - name: Install nightly + cargo-fuzz
+      - name: Use nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install LLVM/Clang for cargo-fuzz
         run: |
-          rustup toolchain install nightly
-          cargo install cargo-fuzz
+          sudo apt-get update
+          sudo apt-get install -y clang llvm
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
       - name: Fuzz build
         run: |
           cd fuzz
