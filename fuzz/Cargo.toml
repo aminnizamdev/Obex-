@@ -1,5 +1,5 @@
 [package]
-name = "obex-engine-i-fuzz"
+name = "obex-alpha-fuzz"
 version = "0.0.0"
 authors = ["Automatically generated"]
 publish = false
@@ -10,10 +10,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-ed25519-dalek = "2.0"
-
-[dependencies.obex-engine-i]
-path = ".."
+ed25519-dalek = "2"
+obex_primitives = { path = "../crates/obex_primitives" }
+obex_alpha_i = { path = "../crates/obex_alpha_i" }
 
 [[bin]]
 name = "registration_decode"

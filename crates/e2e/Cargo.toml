@@ -2,6 +2,12 @@
 name = "e2e"
 version = "0.1.0"
 edition = "2021"
+description = "End-to-end integration tests and harness for OBEX Alpha"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aminnizamdev/Obex-"
+readme = "../../README.md"
+keywords = ["obex", "consensus", "e2e", "tests"]
+categories = ["development-tools::testing"]
 
 [dependencies]
 obex_alpha_i = { path = "../obex_alpha_i" }

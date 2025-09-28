@@ -160,6 +160,7 @@ fn golden_header_field_flip_specific_errors() {
 /// Test comprehensive flip-bit failures for all Header v2 fields
 /// This locks the consensus behavior for Header validation forever
 #[test]
+#[allow(clippy::too_many_lines)]
 fn golden_header_comprehensive_flipbit_failures() {
     let dir = golden_dir();
     let parent_bytes = fs::read(dir.join("header_v2_parent.bin")).expect("read parent");
@@ -194,9 +195,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::BadParentLink,
-                "Parent ID bit flip at byte {} bit {} should cause BadParentLink",
-                byte_idx,
-                bit_idx
+                "Parent ID bit flip at byte {byte_idx} bit {bit_idx} should cause BadParentLink",
             );
         }
     }
@@ -220,9 +219,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::BeaconInvalid,
-                "Seed commit bit flip at byte {} bit {} should cause BeaconInvalid",
-                byte_idx,
-                bit_idx
+                "Seed commit bit flip at byte {byte_idx} bit {bit_idx} should cause BeaconInvalid",
             );
         }
     }
@@ -246,9 +243,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::BeaconInvalid,
-                "VDF Y core bit flip at byte {} bit {} should cause BeaconInvalid",
-                byte_idx,
-                bit_idx
+                "VDF Y core bit flip at byte {byte_idx} bit {bit_idx} should cause BeaconInvalid",
             );
         }
     }
@@ -272,9 +267,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::BeaconInvalid,
-                "VDF Y edge bit flip at byte {} bit {} should cause BeaconInvalid",
-                byte_idx,
-                bit_idx
+                "VDF Y edge bit flip at byte {byte_idx} bit {bit_idx} should cause BeaconInvalid",
             );
         }
     }
@@ -298,9 +291,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::TicketRootMismatch,
-                "Ticket root bit flip at byte {} bit {} should cause TicketRootMismatch",
-                byte_idx,
-                bit_idx
+                "Ticket root bit flip at byte {byte_idx} bit {bit_idx} should cause TicketRootMismatch",
             );
         }
     }
@@ -324,9 +315,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::PartRootMismatch,
-                "Part root bit flip at byte {} bit {} should cause PartRootMismatch",
-                byte_idx,
-                bit_idx
+                "Part root bit flip at byte {byte_idx} bit {bit_idx} should cause PartRootMismatch",
             );
         }
     }
@@ -350,9 +339,7 @@ fn golden_header_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::TxRootPrevMismatch,
-                "TX root prev bit flip at byte {} bit {} should cause TxRootPrevMismatch",
-                byte_idx,
-                bit_idx
+                "TX root prev bit flip at byte {byte_idx} bit {bit_idx} should cause TxRootPrevMismatch",
             );
         }
     }
@@ -395,9 +382,7 @@ fn golden_header_vdf_proof_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::BeaconInvalid,
-                "VDF pi bit flip at byte {} bit {} should cause BeaconInvalid",
-                byte_idx,
-                bit_idx
+                "VDF pi bit flip at byte {byte_idx} bit {bit_idx} should cause BeaconInvalid",
             );
         }
     }
@@ -421,9 +406,7 @@ fn golden_header_vdf_proof_flipbit_failures() {
             assert_eq!(
                 err,
                 ValidateErr::BeaconInvalid,
-                "VDF ell bit flip at byte {} bit {} should cause BeaconInvalid",
-                byte_idx,
-                bit_idx
+                "VDF ell bit flip at byte {byte_idx} bit {bit_idx} should cause BeaconInvalid",
             );
         }
     }

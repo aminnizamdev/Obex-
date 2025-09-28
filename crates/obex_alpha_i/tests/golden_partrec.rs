@@ -88,7 +88,7 @@ fn golden_partrec_flipbit_precise_errors() {
 }
 
 /// Test comprehensive flip-bit failures for all critical fields
-/// This locks the consensus behavior for ObexPartRec validation forever
+/// This locks the consensus behavior for `ObexPartRec` validation forever
 #[test]
 fn golden_partrec_comprehensive_flipbit_failures() {
     let bytes = read_golden();
@@ -111,9 +111,9 @@ fn golden_partrec_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 VerifyErr::AlphaMismatch,
-                "Alpha bit flip at byte {} bit {} should cause AlphaMismatch",
-                byte_idx,
-                bit_idx
+                "Alpha bit flip at byte {byte_idx} bit {bit_idx} should cause AlphaMismatch",
+                
+                
             );
         }
     }
@@ -134,9 +134,9 @@ fn golden_partrec_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 VerifyErr::SeedMismatch,
-                "Seed bit flip at byte {} bit {} should cause SeedMismatch",
-                byte_idx,
-                bit_idx
+                "Seed bit flip at byte {byte_idx} bit {bit_idx} should cause SeedMismatch",
+                
+                
             );
         }
     }
@@ -158,9 +158,9 @@ fn golden_partrec_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 VerifyErr::SigInvalid,
-                "Root bit flip at byte {} bit {} should cause SigInvalid",
-                byte_idx,
-                bit_idx
+                "Root bit flip at byte {byte_idx} bit {bit_idx} should cause SigInvalid",
+                
+                
             );
         }
     }
@@ -177,16 +177,16 @@ fn golden_partrec_comprehensive_flipbit_failures() {
             assert_eq!(
                 err,
                 VerifyErr::SigInvalid,
-                "Signature bit flip at byte {} bit {} should cause SigInvalid",
-                byte_idx,
-                bit_idx
+                "Signature bit flip at byte {byte_idx} bit {bit_idx} should cause SigInvalid",
+                
+                
             );
         }
     }
 }
 
 /// Test oversize challenges (Q != 96) rejection
-/// This locks the CHALLENGES_Q constant behavior forever
+/// This locks the `CHALLENGES_Q` constant behavior forever
 #[test]
 fn golden_partrec_challenges_q_enforcement() {
     let bytes = read_golden();
@@ -218,7 +218,7 @@ fn golden_partrec_challenges_q_enforcement() {
 }
 
 /// Test canonical byte image stability
-/// This ensures the golden ObexPartRec byte representation never changes
+/// This ensures the golden `ObexPartRec` byte representation never changes
 #[test]
 fn golden_partrec_canonical_byte_image() {
     let bytes = read_golden();
@@ -242,4 +242,17 @@ fn golden_partrec_canonical_byte_image() {
     assert_eq!(rec.challenges.len(), CHALLENGES_Q);
     assert_eq!(rec.vrf_y.len(), 64); // Network-wide fixed
     assert_eq!(rec.vrf_pi.len(), 80); // RFC 9381 proof length
+}
+
+#[test]
+fn golden_partrec_oversize_rejects_decode() {
+    let mut bytes = read_golden();
+    // Extend to exceed MAX_PARTREC_SIZE by 1
+    let pad = MAX_PARTREC_SIZE
+        .saturating_sub(bytes.len())
+        .saturating_add(1);
+    bytes.extend(std::iter::repeat_n(0u8, pad));
+    let err = decode_partrec(&bytes).expect_err("oversize must reject early");
+    // Accept any error variant; oversize must not decode successfully
+    let _ = err;
 }

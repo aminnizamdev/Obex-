@@ -1,5 +1,3 @@
-[11 tools called]
-
 Here’s a complete, runnable inventory with exact commands.
 
 ### Workspace-level
@@ -7,14 +5,19 @@ Here’s a complete, runnable inventory with exact commands.
 ```bash
 cargo build --workspace --release --all-targets
 ```
-- Test (release, all crates/features)
+- Tests (release, all crates/features, no fail-fast)
 ```bash
-cargo test --workspace --release --all-features
+cargo test --workspace --release --all-features --no-fail-fast
+cargo test --workspace --release --no-default-features --no-fail-fast
 ```
 - Lints/format
 ```bash
 cargo +stable fmt -- --check
 cargo clippy --workspace --all-targets --all-features -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
+```
+- Docs (optional)
+```bash
+cargo doc --workspace --no-deps
 ```
 
 ### Examples
@@ -26,87 +29,110 @@ cargo run --release -p obex_alpha_i --example gen_golden_partrec
 ```bash
 cargo run --release -p obex_alpha_ii --example gen_golden_header
 ```
-- Top-level examples (legacy; may not compile as-is)
+- Top-level examples (legacy; no root package – may not compile)
 ```bash
+# legacy
 cargo run --release --example ecvrf_verification
 cargo run --release --example ecvrf_implementation
 cargo run --release --example vrf_r255_api
 ```
 
 ### Tests by crate (integration + unit)
+- tests_common (golden/freezing suites)
+```bash
+cargo test -p tests_common --release --test golden_partrec_frozen -- --nocapture
+cargo test -p tests_common --release --test golden_header_v2_frozen -- --nocapture
+cargo test -p tests_common --release --test three_slot_harness_frozen -- --nocapture
+cargo test -p tests_common --release --test vrf_tai_vectors_frozen -- --nocapture
+```
 - obex_primitives
 ```bash
 cargo test -p obex_primitives --release
 # specific: kats / print_tags
-cargo test -p obex_primitives --test kats --release
-cargo test -p obex_primitives --test print_tags --release
+cargo test -p obex_primitives --test kats --release -- --nocapture
+cargo test -p obex_primitives --test print_tags --release -- --nocapture
 ```
 - obex_alpha_i
 ```bash
 cargo test -p obex_alpha_i --release --all-features
 # specific files
-cargo test -p obex_alpha_i --test golden_partrec --release --all-features
-cargo test -p obex_alpha_i --test golden --release --all-features
-cargo test -p obex_alpha_i --test gating --release --all-features
-cargo test -p obex_alpha_i --test vrf_kats --release --all-features
-cargo test -p obex_alpha_i --test vrf_rfc9381_tai --release --all-features
-cargo test -p obex_alpha_i --test vrf_rfc9381_len --release --all-features
-cargo test -p obex_alpha_i --test vrf_vectors --release --all-features
+cargo test -p obex_alpha_i --test golden_partrec --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test golden --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test gating --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test vrf_kats --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test vrf_rfc9381_tai --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test vrf_rfc9381_len --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test vrf_vectors --release --all-features -- --nocapture
+cargo test -p obex_alpha_i --test dedup --release -- --nocapture
 ```
 - obex_alpha_ii
 ```bash
 cargo test -p obex_alpha_ii --release
 # specific: E2E harnesses and goldens
-cargo test -p obex_alpha_ii --test e2e_slots --release
-cargo test -p obex_alpha_ii --test e2e_three_slots --release
-cargo test -p obex_alpha_ii --test e2e --release
-cargo test -p obex_alpha_ii --test golden_header_bytes --release
-cargo test -p obex_alpha_ii --test golden_header --release
-cargo test -p obex_alpha_ii --test golden --release
-cargo test -p obex_alpha_ii --test gating --release
-cargo test -p obex_alpha_ii --test kat_dump --release
+cargo test -p obex_alpha_ii --test e2e_slots --release -- --nocapture
+cargo test -p obex_alpha_ii --test e2e_three_slots --release -- --nocapture
+cargo test -p obex_alpha_ii --test e2e --release -- --nocapture
+cargo test -p obex_alpha_ii --test golden_header_bytes --release -- --nocapture
+cargo test -p obex_alpha_ii --test golden_header --release -- --nocapture
+cargo test -p obex_alpha_ii --test golden --release -- --nocapture
+cargo test -p obex_alpha_ii --test gating --release -- --nocapture
+cargo test -p obex_alpha_ii --test kat_dump --release -- --nocapture
 ```
 - obex_alpha_iii
 ```bash
 cargo test -p obex_alpha_iii --release
 # specific
-cargo test -p obex_alpha_iii --test fee_rule --release
-cargo test -p obex_alpha_iii --test admission --release
-cargo test -p obex_alpha_iii --test settlement --release
-cargo test -p obex_alpha_iii --test golden_roots --release
-cargo test -p obex_alpha_iii --test gating --release
-cargo test -p obex_alpha_iii --test kat_dump --release
+cargo test -p obex_alpha_iii --test fee_rule --release -- --nocapture
+cargo test -p obex_alpha_iii --test admission --release -- --nocapture
+cargo test -p obex_alpha_iii --test settlement --release -- --nocapture
+cargo test -p obex_alpha_iii --test golden_roots --release -- --nocapture
+cargo test -p obex_alpha_iii --test gating --release -- --nocapture
+cargo test -p obex_alpha_iii --test kat_dump --release -- --nocapture
 ```
 - obex_alpha_t
 ```bash
 cargo test -p obex_alpha_t --release
 # specific
-cargo test -p obex_alpha_t --test golden --release
-cargo test -p obex_alpha_t --test emission --release
-cargo test -p obex_alpha_t --test gating --release
+cargo test -p obex_alpha_t --test golden --release -- --nocapture
+cargo test -p obex_alpha_t --test emission --release -- --nocapture
+cargo test -p obex_alpha_t --test gating --release -- --nocapture
+```
+- e2e
+```bash
+cargo test -p e2e --release -- --nocapture
 ```
 
 ### Benchmarks
-- Root benches (legacy; require a root crate named `obex_engine_i`; likely won’t run as-is)
+- Build benches (workspace) without running
 ```bash
-cargo bench
+cargo bench --no-run
+```
+- Run benches (if present in member crates)
+```bash
+cargo bench --workspace
 ```
 
-### Fuzz targets (cargo-fuzz; legacy config references `obex-engine-i`)
-- Requires nightly and cargo-fuzz:
+### Fuzz targets (cargo-fuzz)
+- Prerequisites (once)
 ```bash
-cargo install cargo-fuzz
 rustup toolchain install nightly
+cargo install cargo-fuzz
 ```
-- Run fuzzers (from `fuzz/`; may need crate path updates to compile)
+- Build fuzzers
 ```bash
-cargo +nightly fuzz run registration_decode
-cargo +nightly fuzz run registration_verify
+cd fuzz
+cargo +nightly fuzz build
+```
+- Run fuzzers (short runs)
+```bash
+cd fuzz
+cargo +nightly fuzz run registration_decode -- -runs=10000
+cargo +nightly fuzz run registration_verify -- -runs=10000
 ```
 
-### Handy single-test selectors (examples)
+### Handy selectors
 ```bash
-# run a single test name within a file
+# run a single test by name
 cargo test -p obex_alpha_t emission_monotone_and_total_hits_supply_at_terminal -- --nocapture --exact
 # run VRF vectors only
 cargo test -p obex_alpha_i --test vrf_rfc9381_tai -- --nocapture

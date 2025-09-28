@@ -1,139 +1,68 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use obex_engine_i::{MerklePath, MerkleRoot, verify_merkle_path, mk_chain_vrf, VrfProof, Vrf, ChainId, EpochNonce, VrfOutput, EpochHash, Registration, derive_challenge_indices, compute_leaf, verify_registration};
-use obex_engine_i::types::N_LOG2;
+use obex_primitives::{merkle_root, Hash256};
+use obex_alpha_i::{chal_index, OBEX_ALPHA_I_VERSION};
+use obex_alpha_i::vrf::{ecvrf_verify_beta_tai, VrfPi, VrfPk};
+use obex_alpha_iii::{enc_ticket_leaf, TicketRecord};
 use ed25519_dalek::{SigningKey, Signer};
 use rand_core::OsRng;
 
-fn bench_merkle_verify(c: &mut Criterion) {
-    let index = 12345u32;
-    let leaf = [0u8; 32];
-    let path = MerklePath {
-        path: vec![[0u8; 32]; N_LOG2 as usize],
-    };
-    let root = MerkleRoot([0u8; 32]);
-    
-    c.bench_function("merkle_verify", |b| {
+fn bench_merkle_root(c: &mut Criterion) {
+    let leaves: Vec<Vec<u8>> = (0..1024).map(|i| vec![i as u8; 32]).collect();
+    c.bench_function("merkle_root_1024_leaves", |b| {
         b.iter(|| {
-            let _ = verify_merkle_path(
-                black_box(index),
-                black_box(&leaf),
-                black_box(&path),
-                black_box(&root)
-            );
+            let _ = merkle_root(black_box(&leaves));
         });
     });
 }
 
 fn bench_vrf_verify(c: &mut Criterion) {
-    let pk_bytes = [0u8; 32];
-    let vrf = mk_chain_vrf(pk_bytes);
-    let input = [0u8; 86];
-    let proof = VrfProof([0u8; 80]);
-    
-    c.bench_function("vrf_verify", |b| {
+    let vk: VrfPk = [0u8; 32];
+    let alpha = [0u8; 32];
+    let pi: VrfPi = [0u8; 80];
+    c.bench_function("ecvrf_tai_verify", |b| {
         b.iter(|| {
-            let _ = vrf.verify(
-                black_box(&input),
-                black_box(&proof)
-            );
+            let _ = ecvrf_verify_beta_tai(black_box(&vk), black_box(&alpha), black_box(&pi));
         });
     });
 }
 
-fn bench_challenge_derivation(c: &mut Criterion) {
-    let chain_id = ChainId([0u8; 32]);
-    let epoch_nonce = EpochNonce([1u8; 32]);
-    let vrf_output = VrfOutput([2u8; 64]);
-    let vrf_proof = VrfProof([3u8; 80]);
-    let epoch_hash = EpochHash([4u8; 32]);
-    let root = MerkleRoot([5u8; 32]);
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-    let signature = signing_key.sign(b"test");
-    
-    let reg = Registration {
-        chain_id: &chain_id,
-        epoch_number: 42u64,
-        epoch_nonce: &epoch_nonce,
-        vrf_proof: &vrf_proof,
-        vrf_output: &vrf_output,
-        epoch_hash: &epoch_hash,
-        pk: &verifying_key,
-        sig: &signature,
-        root: &root,
+fn bench_challenge_index(c: &mut Criterion) {
+    let y_prev: Hash256 = [1u8; 32];
+    let root: Hash256 = [2u8; 32];
+    let vrf_y: Vec<u8> = vec![3u8; 64];
+    c.bench_function("chal_index", |b| {
+        b.iter(|| {
+            let _ = chal_index(black_box(&y_prev), black_box(&root), black_box(&vrf_y), black_box(7u32));
+        });
+    });
+}
+
+fn bench_ticket_leaf(c: &mut Criterion) {
+    let rec = TicketRecord {
+        ticket_id: [0u8; 32],
+        txid: [1u8; 32],
+        sender: [2u8; 32],
+        nonce: 0,
+        amount_u: 1000,
+        fee_u: 10,
+        s_admit: 1,
+        s_exec: 1,
+        commit_hash: [3u8; 32],
     };
-    let epoch = 1u32;
-    
-    c.bench_function("challenge_derivation", |b| {
+    c.bench_function("ticket_leaf_encode", |b| {
         b.iter(|| {
-            let _ = derive_challenge_indices(
-                black_box(&reg),
-                black_box(epoch)
-            );
+            let _ = enc_ticket_leaf(black_box(&rec));
         });
     });
 }
 
-fn bench_dataset_generation(c: &mut Criterion) {
-    let key = [0u8; 32];
-    
-    c.bench_function("dataset_leaf_compute", |b| {
-        b.iter(|| {
-            let _ = compute_leaf(
-                black_box(&key),
-                black_box(12345u32)
-            );
-        });
-    });
-}
-
-fn bench_registration_verify(c: &mut Criterion) {
-    let chain_id = ChainId([0u8; 32]);
-    let epoch_nonce = EpochNonce([1u8; 32]);
-    let vrf_output = VrfOutput([2u8; 64]);
-    let vrf_proof = VrfProof([3u8; 80]);
-    let epoch_hash = EpochHash([4u8; 32]);
-    let root = MerkleRoot([5u8; 32]);
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-    let signature = signing_key.sign(b"test");
-    
-    let reg = Registration {
-        chain_id: &chain_id,
-        epoch_number: 42u64,
-        epoch_nonce: &epoch_nonce,
-        vrf_proof: &vrf_proof,
-        vrf_output: &vrf_output,
-        epoch_hash: &epoch_hash,
-        pk: &verifying_key,
-        sig: &signature,
-        root: &root,
-    };
-    let epoch = 1u32;
-    let pk_bytes = [0u8; 32];
-    let vrf = mk_chain_vrf(pk_bytes);
-    let merkle_root = MerkleRoot([0u8; 32]);
-    let challenge_opens = vec![];
-    
-    c.bench_function("registration_verify", |b| {
-        b.iter(|| {
-            let _ = verify_registration(
-                black_box(&reg),
-                black_box(epoch),
-                black_box(&vrf),
-                black_box(&merkle_root),
-                black_box(&challenge_opens)
-            );
-        });
-    });
-}
+// Drop legacy registration benches; covered by crate tests and E2E.
 
 criterion_group!(
     benches,
-    bench_merkle_verify,
+    bench_merkle_root,
     bench_vrf_verify,
-    bench_challenge_derivation,
-    bench_dataset_generation,
-    bench_registration_verify
+    bench_challenge_index,
+    bench_ticket_leaf
 );
 criterion_main!(benches);

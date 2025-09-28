@@ -49,29 +49,27 @@ fn rfc9381_tai_valid_vectors() {
     for (i, vector) in VALID_VECTORS.iter().enumerate() {
         let vk: VrfPk = hex(vector.vk)
             .try_into()
-            .unwrap_or_else(|_| panic!("Invalid VK in vector {}", i));
+            .unwrap_or_else(|_| panic!("Invalid VK in vector {i}"));
         let alpha_bytes = hex(vector.alpha);
         let pi: VrfPi = hex(vector.pi)
             .try_into()
-            .unwrap_or_else(|_| panic!("Invalid PI in vector {}", i));
+            .unwrap_or_else(|_| panic!("Invalid PI in vector {i}"));
         let expected_beta = hex(vector.beta);
 
         // Test verify_msg_tai function (for variable-length alpha)
         let result = verify_msg_tai(&vk, &alpha_bytes, &pi);
-        assert!(result.is_ok(), "Vector {} should verify successfully", i);
+        assert!(result.is_ok(), "Vector {i} should verify successfully");
 
         let beta = result.unwrap();
         assert_eq!(
             beta.len(),
             VRF_Y_BYTES,
-            "Beta should be {} bytes",
-            VRF_Y_BYTES
+            "Beta should be {VRF_Y_BYTES} bytes",
         );
         assert_eq!(
             beta.to_vec(),
             expected_beta,
-            "Beta mismatch in vector {}",
-            i
+            "Beta mismatch in vector {i}",
         );
     }
 }
@@ -121,17 +119,13 @@ fn rfc9381_tai_invalid_proof_single_bit_flip() {
             let result = ecvrf_verify_beta_tai(&vk, &alpha32, &pi);
             assert!(
                 result.is_err(),
-                "Corrupted proof at byte {} bit {} should fail",
-                byte_idx,
-                bit_idx
+                "Corrupted proof at byte {byte_idx} bit {bit_idx} should fail",
             );
 
             let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi);
             assert!(
                 opt_result.is_none(),
-                "Corrupted proof at byte {} bit {} should fail with opt function",
-                byte_idx,
-                bit_idx
+                "Corrupted proof at byte {byte_idx} bit {bit_idx} should fail with opt function",
             );
         }
     }
@@ -156,15 +150,13 @@ fn rfc9381_tai_invalid_public_key() {
         let result = ecvrf_verify_beta_tai(&bad_vk, &alpha32, &pi);
         assert!(
             result.is_err(),
-            "Invalid public key {} should fail verification",
-            i
+            "Invalid public key {i} should fail verification",
         );
 
         let opt_result = ecvrf_verify_beta_tai_opt(bad_vk, alpha32, &pi);
         assert!(
             opt_result.is_none(),
-            "Invalid public key {} should fail verification with opt function",
-            i
+            "Invalid public key {i} should fail verification with opt function",
         );
     }
 }
@@ -184,8 +176,7 @@ fn rfc9381_tai_wrong_proof_lengths() {
         let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha, &pi_wrong_len);
         assert!(
             opt_result.is_none(),
-            "Wrong proof length {} should be rejected",
-            len
+            "Wrong proof length {len} should be rejected",
         );
     }
 
@@ -232,7 +223,6 @@ fn rfc9381_tai_deterministic_output() {
     assert_eq!(
         result1.len(),
         VRF_Y_BYTES,
-        "Beta should be {} bytes",
-        VRF_Y_BYTES
+        "Beta should be {VRF_Y_BYTES} bytes",
     );
 }

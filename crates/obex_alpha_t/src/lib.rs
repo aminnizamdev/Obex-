@@ -463,7 +463,7 @@ pub fn dec_sys_tx(mut src: &[u8]) -> Result<SysTx, SysTxCodecError> {
 }
 
 /// Canonical ordering for system transactions within a slot (consensus-critical)
-/// Order: ESCROW_CREDIT → EMISSION_CREDIT → VERIFIER_CREDIT → TREASURY_CREDIT → BURN → REWARD_PAYOUT (by rank)
+/// Order: `ESCROW_CREDIT` → `EMISSION_CREDIT` → `VERIFIER_CREDIT` → `TREASURY_CREDIT` → `BURN` → `REWARD_PAYOUT` (by rank)
 #[must_use]
 pub fn canonical_sys_tx_order(sys_txs: Vec<SysTx>, y_edge_s: &Hash256) -> Vec<SysTx> {
     // Separate REWARD_PAYOUT transactions from others

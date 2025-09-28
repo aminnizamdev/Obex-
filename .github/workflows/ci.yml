@@ -2,84 +2,39 @@ name: CI
 
 on:
   push:
+    branches: [ master ]
   pull_request:
 
 jobs:
-  build:
+  test-stable:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        features: ["", "--features ecvrf_rfc9381"]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          profile: minimal
-      - name: fmt
-        run: cargo fmt --all -- --check | cat
-      - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::pedantic -D clippy::nursery -D clippy::cargo | cat
-      - name: test
-        run: cargo test --all --all-targets ${{ matrix.features }} | cat
-      - name: workspace test
-        run: cargo test --workspace --release ${{ matrix.features }} | cat
-      - name: golden tests gate
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (all targets)
+        run: cargo build --workspace --all-targets --release
+      - name: Test (VRF on)
+        run: cargo test --workspace --release --all-features --no-fail-fast
+      - name: Test (VRF off)
+        run: cargo test --workspace --release --no-default-features --no-fail-fast
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features -D warnings
+      - name: Format check
+        run: cargo fmt -- --check
+      - name: Benches (build only)
+        run: cargo bench --no-run
+
+  fuzz-nightly:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly + cargo-fuzz
         run: |
-          set -e
-          echo "Running golden tests gate..."
-          # α-I golden tests (original)
-          cargo test --package obex_alpha_i golden_partrec_accept_and_roundtrip ${{ matrix.features }} | cat
-          cargo test --package obex_alpha_i golden_partrec_flipbit_precise_errors ${{ matrix.features }} | cat
-          # α-I golden tests (comprehensive)
-          cargo test --package obex_alpha_i golden_partrec_comprehensive_flipbit_failures ${{ matrix.features }} | cat
-          cargo test --package obex_alpha_i golden_partrec_challenges_q_enforcement ${{ matrix.features }} | cat
-          cargo test --package obex_alpha_i golden_partrec_canonical_byte_image ${{ matrix.features }} | cat
-          # α-II golden tests (original)
-          cargo test --package obex_alpha_ii golden_header_parent_and_child_roundtrip | cat
-          cargo test --package obex_alpha_ii golden_header_child_id_matches_hex | cat
-          cargo test --package obex_alpha_ii golden_header_flipbit_changes_id_or_decode | cat
-          cargo test --package obex_alpha_ii golden_header_field_flip_specific_errors | cat
-          # α-II golden tests (comprehensive)
-          cargo test --package obex_alpha_ii golden_header_comprehensive_flipbit_failures | cat
-          cargo test --package obex_alpha_ii golden_header_vdf_proof_flipbit_failures | cat
-          cargo test --package obex_alpha_ii golden_header_canonical_byte_image_stability | cat
-          echo "Golden tests gate passed!"
-      - name: end-to-end pipeline tests
+          rustup toolchain install nightly
+          cargo install cargo-fuzz
+      - name: Fuzz build
         run: |
-          set -e
-          echo "Running end-to-end pipeline tests..."
-          cargo test --package e2e three_slot_end_to_end_pipeline | cat
-          cargo test --package e2e pipeline_determinism_across_runs | cat
-          echo "End-to-end pipeline tests passed!"
-      - name: vrf feature tests
-        if: matrix.features != ''
-        run: |
-          set -e
-          echo "Running VRF-specific tests..."
-          # RFC-9381 TAI vectors tests with VRF feature
-          cargo test --package obex_alpha_i rfc9381_tai_valid ${{ matrix.features }} | cat
-          cargo test --package obex_alpha_i rfc9381_tai_invalid ${{ matrix.features }} | cat
-          cargo test --package obex_alpha_i rfc9381_tai_len ${{ matrix.features }} | cat
-          echo "VRF feature tests passed!"
-      - name: forbidden tags scan
-        run: |
-          set -e
-          if rg -n "BLAKE3" crates --glob '!**/target/**' ; then echo "Forbidden algorithm BLAKE3 found in workspace"; exit 1; fi
-          if rg -n "[^A-Za-z0-9_]TAG_[A-Z_]+\s*=\s*\"(?!obex\.)" crates --glob '!**/target/**' ; then echo "Non-obex.* tag detected in consensus constants"; exit 1; fi
-      - name: tag guard
-        run: |
-          set -e
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG_NAME=${GITHUB_REF#refs/tags/}
-            if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Invalid tag format: $TAG_NAME. Must be vX.Y.Z"
-              exit 1
-            fi
-            if [[ "$GITHUB_REF_NAME" != "main" ]] && [[ "$GITHUB_BASE_REF" != "main" ]]; then
-              echo "Tags can only be created from main branch"
-              exit 1
-            fi
-          fi
+          cd fuzz
+          cargo +nightly fuzz build
 

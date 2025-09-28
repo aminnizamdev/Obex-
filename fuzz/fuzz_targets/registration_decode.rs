@@ -1,9 +1,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use obex_engine_i::ser::decode_registration;
+use obex_alpha_i::decode_partrec;
 
 fuzz_target!(|data: &[u8]| {
-    // Fuzz the registration decoder with arbitrary input
-    let _ = decode_registration(data);
+    let _ = decode_partrec(data);
 });

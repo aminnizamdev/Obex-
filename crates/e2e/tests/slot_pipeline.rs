@@ -2,9 +2,9 @@
 //!
 //! This test implements the full protocol pipeline as described in solutions B7:
 //! - s−1 settlement: produces α-I proofs targeting s
-//! - s finality: builds P_s/part_root_s, admits txs → ticket_root_s, recomputes txroot_{s−1}, builds Header s; validates
-//! - s settlement: runs α-T (escrow, splits, emission, DRP), emits system tx, computes txroot_s
-//! - s+1 finality: builds Header s+1 committing txroot_s; validates
+//! - s finality: builds `P_s/part_root_s`, admits txs → `ticket_root_s`, recomputes txroot_{s−1}, builds Header s; validates
+//! - s settlement: runs α-T (escrow, splits, emission, DRP), emits system tx, computes `txroot_s`
+//! - s+1 finality: builds Header s+1 committing `txroot_s`; validates
 //! - Asserts only one valid header for the fixed (parent, s)
 
 use obex_alpha_i::ObexPartRec;
@@ -78,30 +78,30 @@ impl PartRootProvider for MockProviders {
 
 impl TicketRootProvider for MockProviders {
     fn compute_ticket_root(&self, slot: u64) -> Hash256 {
-        if let Some(records) = self.ticket_records.get(&slot) {
-            let mut sorted_records = records.clone();
-            sorted_records.sort_by(|a, b| a.txid.cmp(&b.txid));
-            let leaves: Vec<Vec<u8>> = sorted_records
-                .iter()
-                .map(|record| {
-                    let mut payload = Vec::new();
-                    payload.extend_from_slice(&h_tag(constants::TAG_TICKET_LEAF, &[]));
-                    payload.extend_from_slice(&record.ticket_id);
-                    payload.extend_from_slice(&record.txid);
-                    payload.extend_from_slice(&record.sender);
-                    payload.extend_from_slice(&le_bytes::<8>(u128::from(record.nonce)));
-                    payload.extend_from_slice(&le_bytes::<16>(record.amount_u));
-                    payload.extend_from_slice(&le_bytes::<16>(record.fee_u));
-                    payload.extend_from_slice(&le_bytes::<8>(u128::from(record.s_admit)));
-                    payload.extend_from_slice(&le_bytes::<8>(u128::from(record.s_exec)));
-                    payload.extend_from_slice(&record.commit_hash);
-                    payload
-                })
-                .collect();
-            obex_primitives::merkle_root(&leaves)
-        } else {
-            empty_root()
-        }
+        self.ticket_records
+            .get(&slot)
+            .map_or_else(empty_root, |records| {
+                let mut sorted_records = records.clone();
+                sorted_records.sort_by(|a, b| a.txid.cmp(&b.txid));
+                let leaves: Vec<Vec<u8>> = sorted_records
+                    .iter()
+                    .map(|record| {
+                        let mut payload = Vec::new();
+                        payload.extend_from_slice(&h_tag(constants::TAG_TICKET_LEAF, &[]));
+                        payload.extend_from_slice(&record.ticket_id);
+                        payload.extend_from_slice(&record.txid);
+                        payload.extend_from_slice(&record.sender);
+                        payload.extend_from_slice(&le_bytes::<8>(u128::from(record.nonce)));
+                        payload.extend_from_slice(&le_bytes::<16>(record.amount_u));
+                        payload.extend_from_slice(&le_bytes::<16>(record.fee_u));
+                        payload.extend_from_slice(&le_bytes::<8>(u128::from(record.s_admit)));
+                        payload.extend_from_slice(&le_bytes::<8>(u128::from(record.s_exec)));
+                        payload.extend_from_slice(&record.commit_hash);
+                        payload
+                    })
+                    .collect();
+                obex_primitives::merkle_root(&leaves)
+            })
     }
 }
 
@@ -140,8 +140,8 @@ fn mk_parent() -> Header {
 fn create_mock_tx_bodies(slot: u64, y_bind: &Hash256, count: usize) -> Vec<TxBodyV1> {
     (0..count)
         .map(|i| TxBodyV1 {
-            sender: [i as u8; 32],
-            recipient: [(i + 1) as u8; 32],
+            sender: [u8::try_from(i).unwrap_or(0); 32],
+            recipient: [u8::try_from(i + 1).unwrap_or(0); 32],
             nonce: i as u64,
             amount_u: 1000 + (i as u128) * 100,
             fee_u: fee_int_uobx(1000 + (i as u128) * 100),
@@ -163,17 +163,17 @@ fn create_mock_part_records(
         .iter()
         .enumerate()
         .map(|(i, pk)| {
-            let vrf_pk = [i as u8; 32];
+            let vrf_pk = [u8::try_from(i).unwrap_or(0); 32];
             let alpha = h_tag(
                 constants::TAG_ALPHA,
                 &[
                     &[0u8; 32],
                     &le_bytes::<8>(slot.into()),
                     y_edge_prev,
-                    &[i as u8; 32],
+                    &[u8::try_from(i).unwrap_or(0); 32],
                 ],
             );
-            let vrf_y = vec![i as u8; 64];
+            let vrf_y = vec![u8::try_from(i).unwrap_or(0); 64];
             let seed = h_tag(constants::TAG_SEED, &[y_edge_prev, pk, &vrf_y]);
 
             ObexPartRec {
@@ -184,17 +184,18 @@ fn create_mock_part_records(
                 y_edge_prev: *y_edge_prev,
                 alpha,
                 vrf_y,
-                vrf_pi: vec![i as u8; 80],
+                vrf_pi: vec![u8::try_from(i).unwrap_or(0); 80],
                 seed,
                 root: empty_root(),
                 challenges: vec![], // Empty challenges for mock
-                sig: [i as u8; 64],
+                sig: [u8::try_from(i).unwrap_or(0); 64],
             }
         })
         .collect()
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn three_slot_end_to_end_pipeline() {
     // Initialize test data
     let part_pks: Vec<Pk32> = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
@@ -206,7 +207,7 @@ fn three_slot_end_to_end_pipeline() {
 
     // Process 3 slots in the pipeline
     for slot in 1..=3u64 {
-        println!("Processing slot {}", slot);
+        println!("Processing slot {slot}");
 
         // === s−1 settlement: produces α-I proofs targeting s ===
         let y_edge_prev = h_prev.vdf_y_edge;
@@ -318,8 +319,7 @@ fn three_slot_end_to_end_pipeline() {
             &le_bytes::<8>(u128::from(final_slot)),
         ],
     );
-    #[allow(clippy::cast_possible_truncation)]
-    let y_core_final = h_tag(constants::TAG_VDF_YCORE, &[&[final_slot as u8; 32]]);
+    let y_core_final = h_tag(constants::TAG_VDF_YCORE, &[&[u8::try_from(final_slot).unwrap_or(0); 32]]);
     let y_edge_final = h_tag(constants::TAG_VDF_EDGE, &[&y_core_final]);
 
     let header_final = build_header(
@@ -352,6 +352,7 @@ fn three_slot_end_to_end_pipeline() {
     // === Assert only one valid header for the fixed (parent, s) ===
 
     // Test that changing any component breaks validation
+    #[allow(clippy::redundant_clone)]
     let mut invalid_header = header_final.clone();
     invalid_header.ticket_root[0] ^= 1;
 
@@ -388,10 +389,7 @@ fn three_slot_end_to_end_pipeline() {
     );
 
     println!("3-slot end-to-end pipeline completed successfully!");
-    println!(
-        "Final header ID: {:?}",
-        hex::encode(obex_header_id(&header_final))
-    );
+    println!("Final header ID: {:?}", hex::encode(obex_header_id(&header_final)));
 }
 
 #[test]
@@ -401,7 +399,7 @@ fn pipeline_determinism_across_runs() {
 
     let run_pipeline = || {
         let providers = MockProviders::new(part_pks.clone());
-        let _beacon = MockBeacon;
+        // beacon not needed explicitly here
         let parent = mk_parent();
         let mut h_prev = parent;
         let mut header_ids = Vec::new();
@@ -411,8 +409,7 @@ fn pipeline_determinism_across_runs() {
                 constants::TAG_SLOT_SEED,
                 &[&obex_header_id(&h_prev), &le_bytes::<8>(u128::from(slot))],
             );
-            #[allow(clippy::cast_possible_truncation)]
-            let y_core = h_tag(constants::TAG_VDF_YCORE, &[&[slot as u8; 32]]);
+            let y_core = h_tag(constants::TAG_VDF_YCORE, &[&[u8::try_from(slot).unwrap_or(0); 32]]);
             let y_edge = h_tag(constants::TAG_VDF_EDGE, &[&y_core]);
 
             let header = build_header(

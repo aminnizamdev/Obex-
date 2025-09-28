@@ -74,7 +74,7 @@ fn rfc9381_tai_invalid() {
     assert!(verify_msg_tai(&vk_bad, &alpha, &pi).is_err());
 }
 
-/// Test ecvrf_verify_beta_tai function behavior and API consistency
+/// Test `ecvrf_verify_beta_tai` function behavior and API consistency
 /// This locks the VRF adapter behaviour and β/π lengths forever as required
 #[test]
 fn ecvrf_verify_beta_tai_valid_cases() {
@@ -121,12 +121,11 @@ fn ecvrf_verify_beta_tai_valid_cases() {
     assert_eq!(
         beta.len(),
         VRF_Y_BYTES,
-        "Beta should be {} bytes",
-        VRF_Y_BYTES
+        "Beta should be {VRF_Y_BYTES} bytes",
     );
 }
 
-/// Test ecvrf_verify_beta_tai function with invalid cases (bit-flipped)
+/// Test `ecvrf_verify_beta_tai` function with invalid cases (bit-flipped)
 /// This ensures verification fails for corrupted inputs as required
 #[test]
 fn ecvrf_verify_beta_tai_invalid_cases() {
@@ -151,18 +150,14 @@ fn ecvrf_verify_beta_tai_invalid_cases() {
             let result = ecvrf_verify_beta_tai(&vk, &alpha32, &pi);
             assert!(
                 result.is_err(),
-                "Corrupted proof at byte {} bit {} should fail",
-                byte_idx,
-                bit_idx
+                "Corrupted proof at byte {byte_idx} bit {bit_idx} should fail",
             );
 
             // ecvrf_verify_beta_tai_opt should also fail
             let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi);
             assert!(
                 opt_result.is_none(),
-                "Corrupted proof at byte {} bit {} should fail with opt function",
-                byte_idx,
-                bit_idx
+                "Corrupted proof at byte {byte_idx} bit {bit_idx} should fail with opt function",
             );
         }
     }
@@ -179,15 +174,13 @@ fn ecvrf_verify_beta_tai_invalid_cases() {
         let result = ecvrf_verify_beta_tai(&bad_vk, &alpha32, &pi);
         assert!(
             result.is_err(),
-            "Invalid public key {} should fail verification",
-            i
+            "Invalid public key {i} should fail verification",
         );
 
         let opt_result = ecvrf_verify_beta_tai_opt(bad_vk, alpha32, &pi);
         assert!(
             opt_result.is_none(),
-            "Invalid public key {} should fail verification with opt function",
-            i
+            "Invalid public key {i} should fail verification with opt function",
         );
     }
 }
@@ -212,8 +205,7 @@ fn ecvrf_verify_beta_tai_length_enforcement() {
         let opt_result = ecvrf_verify_beta_tai_opt(vk, alpha32, &pi_wrong);
         assert!(
             opt_result.is_none(),
-            "Wrong proof length {} should be rejected",
-            len
+            "Wrong proof length {len} should be rejected",
         );
     }
 
