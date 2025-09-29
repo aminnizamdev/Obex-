@@ -44,6 +44,5 @@ jobs:
         run: cargo install cargo-fuzz
       - name: Fuzz build
         run: |
-          cd fuzz
-          cargo +nightly fuzz build --sanitizer none
+          if [ -d fuzz ]; then cd fuzz && cargo +nightly fuzz build --sanitizer none; fi
 
