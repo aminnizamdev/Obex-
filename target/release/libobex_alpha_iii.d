@@ -1,0 +1,1 @@
+C:\Users\VP\Desktop\OBEX.ALPHA\ v1\target\release\libobex_alpha_iii.rlib: C:\Users\VP\Desktop\OBEX.ALPHA\ v1\crates\obex_alpha_iii\src\lib.rs C:\Users\VP\Desktop\OBEX.ALPHA\ v1\crates\obex_primitives\src\consensus.rs C:\Users\VP\Desktop\OBEX.ALPHA\ v1\crates\obex_primitives\src\constants.rs C:\Users\VP\Desktop\OBEX.ALPHA\ v1\crates\obex_primitives\src\lib.rs

@@ -52,6 +52,7 @@ pub const LEN_U128: usize = 16;
 
 // Length-framed, domain-tagged SHA3-256
 #[inline]
+#[must_use]
 pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
     debug_assert!(OBEX_SHA3_TAGS.contains(&tag));
     let mut buf = Vec::with_capacity(64);
@@ -65,6 +66,7 @@ pub fn h_tag(tag: &str, parts: &[&[u8]]) -> Hash256 {
 }
 
 // Plug in your real SHA3-256 here:
+#[must_use]
 pub fn sha3_256(input: &[u8]) -> Hash256 {
     let mut hasher = Sha3_256::new();
     hasher.update(input);
@@ -76,11 +78,13 @@ pub fn sha3_256(input: &[u8]) -> Hash256 {
 
 // Binary Merkle with duplicate-last
 #[inline]
+#[must_use]
 pub fn merkle_leaf(payload: &[u8]) -> Hash256 {
     h_tag("merkle.leaf", &[payload])
 }
 
 #[inline]
+#[must_use]
 pub fn merkle_node(l: &Hash256, r: &Hash256) -> Hash256 {
     let mut cat = [0u8; 64];
     cat[..32].copy_from_slice(l);
@@ -88,6 +92,7 @@ pub fn merkle_node(l: &Hash256, r: &Hash256) -> Hash256 {
     h_tag("merkle.node", &[&cat])
 }
 
+#[must_use]
 pub fn merkle_root(leaves_payload: &[Vec<u8>]) -> Hash256 {
     if leaves_payload.is_empty() {
         return h_tag("merkle.empty", &[]);
