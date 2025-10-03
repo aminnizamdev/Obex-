@@ -11,7 +11,7 @@ categories = ["cryptography","algorithms","data-structures"]
 
 [dependencies]
 obex_primitives = { path = "../obex_primitives" }
-thiserror = "2.0"
+thiserror = "2.0.16"
 
 [dev-dependencies]
 hex = "0.4"

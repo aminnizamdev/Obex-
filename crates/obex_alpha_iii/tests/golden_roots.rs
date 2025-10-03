@@ -74,7 +74,7 @@ fn ticket_and_tx_roots_fixed_hex() {
     let ticket_root = merkle_root(&leaves).encode_hex::<String>();
     assert_eq!(
         ticket_root,
-        "d3869a56f8eab1b055a9adf2835e2c164292c51e53fcb9168b8c20b7473ece9d"
+        "567052422067e8d59cbbcfade725a0c3e21d77e947fd465908a6425fb998c95f"
     );
 
     let txids = [rec1.txid, rec2.txid];
@@ -90,7 +90,7 @@ fn ticket_and_tx_roots_fixed_hex() {
     let txroot = merkle_root(&leaves_tx).encode_hex::<String>();
     assert_eq!(
         txroot,
-        "24974d37ad6c4da1b1ee8d655b6d8cf05db37ae9e5b3b75d41e5351708f86800"
+        "217d4936f78adf09a87c9a25171c280395fa185190308c4142a314266854433f"
     );
 }
 

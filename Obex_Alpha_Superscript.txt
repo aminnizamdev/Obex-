@@ -3652,8 +3652,8 @@ ecvrf_rfc9381-ed25519 = ["ecvrf_rfc9381"]
 
 [dependencies]
 obex_primitives = { path = "../obex_primitives" }
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
-thiserror = "2.0"
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc"] }
+thiserror = "2.0.16"
 vrf-rfc9381 = { version = "0.0.3", optional = true, default-features = false, features = ["edwards25519"] }
 sha2 = { version = "0.10", optional = true }
 
@@ -5771,6 +5771,7 @@ pub fn build_header(
 pub enum ValidateErr {
     BadParentLink,
     BadSlot,
+    BadSeedCommit,
     BeaconInvalid,
     TicketRootMismatch,
     PartRootMismatch,
@@ -5810,7 +5811,8 @@ pub fn validate_header(
         return Err(ValidateErr::VdfEllTooBig);
     }
 
-    // 3) Beacon verification
+    // 3) Seed commit equality and Beacon verification
+    // Seed commit must equal H("obex.slot.seed", [ parent_id, LE(slot,8) ])
     if !beacon.verify(&BeaconInputs {
         parent_id: &h.parent_id,
         slot: h.slot,
@@ -6979,7 +6981,7 @@ categories = ["cryptography","algorithms","data-structures"]
 
 [dependencies]
 obex_primitives = { path = "../obex_primitives" }
-ed25519-dalek = { version = "2", default-features = true }
+ed25519-dalek = { version = "2.2.0", default-features = true }
 thiserror = "2.0"
 
 
@@ -7652,7 +7654,7 @@ categories = ["cryptography","algorithms","data-structures"]
 [dependencies]
 obex_primitives = { path = "../obex_primitives" }
 thiserror = "2.0"
-primitive-types = "0.12"
+primitive-types = "0.12.2"
 
 [dev-dependencies]
 hex = "0.4"
@@ -8528,9 +8530,9 @@ std = ["sha3/std"]
 alloc = []
 
 [dependencies]
-sha3 = { version = "0.10", default-features = false }
-subtle = { version = "2.5", default-features = false }
-thiserror = "2.0"
+sha3 = { version = "0.10.8", default-features = false }
+subtle = { version = "2.6.1", default-features = false }
+thiserror = "2.0.16"
 
 [dev-dependencies]
 hex = "0.4"
@@ -30147,7 +30149,7 @@ fn test_P5_Abs() {
 } 
 ^>Users^>VP^>Desktop^>OBEX.ALPHA v1^>src^>challenge.rs 
 use crate::{types::{Registration, N_LEAVES, CHALLENGE_COUNT}, errors::Step1Error, hashers::build_challenge_seed};
-use blake3;
+use sha3::{Digest, Sha3_256};
 
 /// Derive challenge indices using uniform rejection sampling.
 /// Derive challenge indices from registration data.
@@ -30161,13 +30163,12 @@ pub fn derive_challenge_indices(reg: &Registration, _epoch: u32) -> Result<Vec<u
     let mut counter = 0u64;
     
     while indices.len() < CHALLENGE_COUNT {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = Sha3_256::new();
         hasher.update(&seed);
         hasher.update(&counter.to_le_bytes());
-        let hash = hasher.finalize();
-        
+        let digest = hasher.finalize();
+        let bytes: [u8; 32] = digest.into();
         // Extract 4 bytes and interpret as u32
-        let bytes = hash.as_bytes();
         let candidate = u32::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3]
         ]);
@@ -30211,7 +30212,7 @@ pub fn verify_challenge_indices(reg: &Registration, epoch: u32, indices: &[u32])
 } 
 ^>Users^>VP^>Desktop^>OBEX.ALPHA v1^>src^>dataset.rs 
 use crate::types::N_LEAVES;
-use blake3;
+use sha3::{Digest, Sha3_256};
 
 /// Streaming builder yields leaves without holding 2 GB in RAM.
 pub struct DatasetBuilder<'a> {
@@ -30235,13 +30236,16 @@ impl Iterator for DatasetBuilder<'_> {
     }
 }
 
-/// Leaf[i] = BLAKE3(key=K, input=LE64(i))
+/// Leaf[i] = SHA3_256( K || LE64(i) )
 #[must_use]
 pub fn compute_leaf(k: &[u8;32], index: u32) -> [u8; 32] {
     let msg = index.to_le_bytes();
-    let keyed = blake3::keyed_hash(k, &msg);
-    let mut out = [0u8;32];
-    out.copy_from_slice(keyed.as_bytes());
+    let mut hasher = Sha3_256::new();
+    hasher.update(k);
+    hasher.update(&msg);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
     out
 } 
 ^>Users^>VP^>Desktop^>OBEX.ALPHA v1^>src^>domain.rs 
@@ -30585,11 +30589,11 @@ pub enum Step1Error {
     TicketExpired { timestamp: u64, current_time: u64, window: u64 },
 } 
 ^>Users^>VP^>Desktop^>OBEX.ALPHA v1^>src^>hashers.rs 
-use blake3;
+use sha3::{Digest, Sha3_256};
 use ed25519_dalek as ed25519;
 use crate::{types::{ChainId, DOMAIN_TAG, EpochHash, EpochNonce, MerkleRoot, VrfOutput, VrfProof}, ser::le64, domain::{TAG_CHAL, TAG_EPOCH, TAG_KDF, TAG_SEED, TAG_VRFOUT}};
 
-/// E = `BLAKE3(DOMAIN_TAG` || "VRFOUT" || `CHAIN_ID` || `LE64(epoch_number)` || `epoch_nonce` || y || π)
+/// E = SHA3_256( DOMAIN_TAG || "VRFOUT" || CHAIN_ID || LE64(epoch_number) || epoch_nonce || y || π )
 #[must_use]
 pub fn compute_epoch_hash(
     chain_id: &ChainId,
@@ -30598,7 +30602,7 @@ pub fn compute_epoch_hash(
     y: &VrfOutput,
     pi: &VrfProof,
 ) -> EpochHash {
-    let mut h = blake3::Hasher::new();
+    let mut h = Sha3_256::new();
     h.update(DOMAIN_TAG);
     h.update(TAG_VRFOUT);
     h.update(&chain_id.0);
@@ -30606,8 +30610,9 @@ pub fn compute_epoch_hash(
     h.update(&epoch_nonce.0);
     h.update(&y.0);
     h.update(&pi.0);
+    let digest = h.finalize();
     let mut out = [0u8; 32];
-    out.copy_from_slice(h.finalize().as_bytes());
+    out.copy_from_slice(&digest);
     EpochHash(out)
 }
 
@@ -30625,26 +30630,26 @@ pub fn build_m(epoch_hash: &EpochHash, epoch_nonce: &EpochNonce, pk: &ed25519::V
 
 // Note: A `build_M` alias is intentionally omitted to satisfy pedantic naming lints.
 
-/// SEED = `BLAKE3(DOMAIN_TAG` || "SEED" || M || σ)
-/// K    = `BLAKE3(DOMAIN_TAG` || "KDF"  || SEED)
+/// SEED = SHA3_256( DOMAIN_TAG || "SEED" || M || σ )
+/// K    = SHA3_256( DOMAIN_TAG || "KDF"  || SEED )
 #[must_use]
 pub fn derive_seed_and_key(m: &[u8], sigma: &ed25519::Signature) -> ([u8; 32], [u8; 32]) {
-    let mut h = blake3::Hasher::new();
+    let mut h = Sha3_256::new();
     h.update(DOMAIN_TAG); h.update(TAG_SEED); h.update(m); h.update(&sigma.to_bytes());
-    let seed = h.finalize();
+    let seed_digest = h.finalize();
 
-    let mut h2 = blake3::Hasher::new();
-    h2.update(DOMAIN_TAG); h2.update(TAG_KDF); h2.update(seed.as_bytes());
-    let k = h2.finalize();
+    let mut h2 = Sha3_256::new();
+    h2.update(DOMAIN_TAG); h2.update(TAG_KDF); h2.update(&seed_digest);
+    let k_digest = h2.finalize();
 
     let mut seed_out = [0u8;32];
     let mut k_out = [0u8;32];
-    seed_out.copy_from_slice(seed.as_bytes());
-    k_out.copy_from_slice(k.as_bytes());
+    seed_out.copy_from_slice(&seed_digest);
+    k_out.copy_from_slice(&k_digest);
     (seed_out, k_out)
 }
 
-/// C = `BLAKE3(DOMAIN_TAG` || "CHAL" || E || `epoch_nonce` || pk || root)
+/// C = SHA3_256( DOMAIN_TAG || "CHAL" || E || epoch_nonce || pk || root )
 #[must_use]
 pub fn build_challenge_seed(
     epoch_hash: &EpochHash,
@@ -30652,14 +30657,15 @@ pub fn build_challenge_seed(
     pk: &ed25519::VerifyingKey,
     root: &MerkleRoot,
 ) -> [u8; 32] {
-    let mut h = blake3::Hasher::new();
+    let mut h = Sha3_256::new();
     h.update(DOMAIN_TAG); h.update(TAG_CHAL);
     h.update(&epoch_hash.0);
     h.update(&epoch_nonce.0);
     h.update(pk.as_bytes());
     h.update(&root.0);
+    let digest = h.finalize();
     let mut out = [0u8;32];
-    out.copy_from_slice(h.finalize().as_bytes());
+    out.copy_from_slice(&digest);
     out
 } 
 ^>Users^>VP^>Desktop^>OBEX.ALPHA v1^>src^>lib.rs 
@@ -30676,10 +30682,10 @@ pub fn build_challenge_seed(
 // Step 1: Sybil-deterrence (byte-precise, exact to agreed spec)
 //
 // Fixed cryptographic choices agreed:
-// - Hash: BLAKE3 (32-byte output)
-// - Signature: Ed25519
+// - Hash: SHA3-256 (32-byte output) with length framing and domain tags
+// - Signature: Ed25519 (strict/canonical verification)
 // - VRF: ECVRF-RISTRETTO255-SHA512 (RFC 9381)
-// - Merkle tree: Binary, BLAKE3-based, 2^26 leaves
+// - Merkle tree: Binary, SHA3-256-based, 2^26 leaves (duplicate-last)
 // - Domain separation: 14-byte ASCII tag "[Iota]_|::"v1"
 //
 // This implementation prioritizes:
@@ -30719,15 +30725,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_VERSION: u32 = 1;
  
 ^>Users^>VP^>Desktop^>OBEX.ALPHA v1^>src^>merkle.rs 
-use blake3;
+use sha3::{Digest, Sha3_256};
 use crate::{types::{MerklePath, MerkleRoot, N_LEAVES}, errors::Step1Error};
 
 #[inline]
 fn parent_hash(left: &[u8;32], right: &[u8;32]) -> [u8;32] {
-    let mut h = blake3::Hasher::new();
-    h.update(left); h.update(right);
+    let mut h = Sha3_256::new();
+    h.update(left);
+    h.update(right);
+    let digest = h.finalize();
     let mut out = [0u8;32];
-    out.copy_from_slice(h.finalize().as_bytes());
+    out.copy_from_slice(&digest);
     out
 }
 
@@ -31124,7 +31132,7 @@ pub const ALPHA_LEN: usize = 14 + 32 + 8 + 32; // 86 bytes
 pub const VRF_OUTPUT_LEN: usize = 64;          // y
 pub const VRF_PROOF_LEN: usize  = 80;          // π = γ(32)||c(16)||s(32)
 pub const LEAF_LEN: usize = 32;                // 32-byte leaves
-pub const MERKLE_ROOT_LEN: usize = 32;         // BLAKE3 root
+pub const MERKLE_ROOT_LEN: usize = 32;         // SHA3-256 root
 pub const N_LOG2: u8 = 26;                     // tree depth 26
 pub const N_LEAVES: u32 = 1u32 << N_LOG2;      // 67,108,864
 pub const CHALLENGE_COUNT: usize = 32;          // number of challenges per registration
@@ -31167,7 +31175,7 @@ pub struct Registration<'a> {
     pub epoch_nonce: &'a EpochNonce,
     pub vrf_proof: &'a VrfProof,
     pub vrf_output: &'a VrfOutput,
-    pub epoch_hash: &'a EpochHash, // 32-byte BLAKE3 digest
+    pub epoch_hash: &'a EpochHash, // 32-byte SHA3-256 digest
     pub pk: &'a ed25519_dalek::VerifyingKey,
     pub sig: &'a ed25519_dalek::Signature,
     pub root: &'a MerkleRoot,

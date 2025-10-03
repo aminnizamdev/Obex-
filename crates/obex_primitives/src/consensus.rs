@@ -12,10 +12,10 @@ pub type Hash256 = [u8; 32];
 
 pub const OBEX_SHA3_TAGS: &[&str] = &[
     // shared Merkle / part
-    "merkle.leaf",
-    "merkle.node",
-    "merkle.empty",
-    "part.leaf",
+    "obex.merkle.leaf",
+    "obex.merkle.node",
+    "obex.merkle.empty",
+    "obex.part.leaf",
     // α-I (Obex)
     "obex.alpha",
     "obex.partrec",
@@ -27,22 +27,22 @@ pub const OBEX_SHA3_TAGS: &[&str] = &[
     "obex.vrfy",
     // α-II (header)
     "obex.header.id",
-    "slot.seed",
+    "obex.slot.seed",
     // α-III (admission/tx)
-    "tx.access",
-    "tx.body.v1",
-    "tx.id",
-    "tx.commit",
-    "tx.sig",
-    "ticket.id",
-    "ticket.leaf",
+    "obex.tx.access",
+    "obex.tx.body.v1",
+    "obex.tx.id",
+    "obex.tx.commit",
+    "obex.tx.sig",
+    "obex.ticket.id",
+    "obex.ticket.leaf",
     // α-T (tokenomics/system tx/rewards)
-    "sys.tx",
-    "reward.draw",
-    "reward.rank",
+    "obex.sys.tx",
+    "obex.reward.draw",
+    "obex.reward.rank",
     // VDF canonical (if your adapter uses them)
-    "vdf.ycore.canon",
-    "vdf.edge",
+    "obex.vdf.ycore",
+    "obex.vdf.edge",
 ];
 
 pub const MAX_PARTREC_SIZE: usize = 600_000;

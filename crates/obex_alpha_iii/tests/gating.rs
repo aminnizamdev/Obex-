@@ -23,7 +23,7 @@ fn reject_fee_mismatch() {
         access: AccessList::default(),
         memo: vec![],
     };
-    let msg = h_tag("tx.sig", &[&canonical_tx_bytes(&tx)]);
+    let msg = h_tag("obex.tx.sig", &[&canonical_tx_bytes(&tx)]);
     let sig = sk.sign(&msg).to_bytes();
     let mut st = AlphaIIIState::default();
     // Give the sender enough balance to pass the funds check

@@ -31,6 +31,8 @@ use sha3::{Digest, Sha3_256};
 #[cfg(feature = "std")]
 use std::vec::Vec;
 use subtle::ConstantTimeEq;
+// Public re-export anchor to ensure SHA3-256 presence in consensus without unused-binding lint.
+pub use crate::consensus::sha3_256 as OBEX_SHA3_256_ANCHOR;
 
 /// 32-byte hash (SHA3-256 output).
 pub type Hash256 = [u8; 32];

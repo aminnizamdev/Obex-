@@ -1,5 +1,5 @@
 use crate::{types::{Registration, N_LEAVES, CHALLENGE_COUNT}, errors::Step1Error, hashers::build_challenge_seed};
-use blake3;
+use sha3::{Digest, Sha3_256};
 
 /// Derive challenge indices using uniform rejection sampling.
 /// Derive challenge indices from registration data.
@@ -13,13 +13,12 @@ pub fn derive_challenge_indices(reg: &Registration, _epoch: u32) -> Result<Vec<u
     let mut counter = 0u64;
     
     while indices.len() < CHALLENGE_COUNT {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = Sha3_256::new();
         hasher.update(&seed);
         hasher.update(&counter.to_le_bytes());
-        let hash = hasher.finalize();
-        
+        let digest = hasher.finalize();
+        let bytes: [u8; 32] = digest.into();
         // Extract 4 bytes and interpret as u32
-        let bytes = hash.as_bytes();
         let candidate = u32::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3]
         ]);

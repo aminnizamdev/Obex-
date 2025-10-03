@@ -20,6 +20,8 @@ use obex_primitives::{consensus, le_bytes, u64_from_le, Hash256};
 use primitive_types::U256;
 use std::sync::LazyLock as Lazy;
 use thiserror::Error;
+// Anchor to ensure SHA3-256 presence without underscore-binding side effects.
+pub use obex_primitives::OBEX_SHA3_256_ANCHOR as _obex_sha3_anchor_t;
 
 /// Network version (consensus-sealed)
 pub const OBEX_ALPHA_T_VERSION: u32 = 1;
@@ -284,7 +286,7 @@ pub fn process_transfer(
 #[inline]
 fn ctr_draw(y: &Hash256, s: u64, t: u32) -> Hash256 {
     consensus::h_tag(
-        "reward.draw",
+        "obex.reward.draw",
         &[
             y,
             &le_bytes::<8>(u128::from(s)),
@@ -322,7 +324,7 @@ pub fn pick_k_unique_indices(
 
 #[inline]
 fn reward_rank(y: &Hash256, pk: &Hash256) -> Hash256 {
-    consensus::h_tag("reward.rank", &[y, pk])
+    consensus::h_tag("obex.reward.rank", &[y, pk])
 }
 
 pub const DRP_BASELINE_PCT: u8 = 20;
@@ -422,7 +424,7 @@ const fn read_exact<'a>(src: &mut &'a [u8], n: usize) -> Result<&'a [u8], SysTxC
 #[must_use]
 pub fn enc_sys_tx(tx: &SysTx) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&consensus::h_tag("sys.tx", &[]));
+    out.extend_from_slice(&consensus::h_tag("obex.sys.tx", &[]));
     out.extend_from_slice(&[tx.kind as u8]);
     out.extend_from_slice(&le_bytes::<8>(u128::from(tx.slot)));
     out.extend_from_slice(&tx.pk);

@@ -20,6 +20,8 @@
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use obex_primitives::{consensus, le_bytes, merkle_root, Hash256, Pk32, Sig64};
+// Anchor to ensure SHA3-256 presence without underscore-binding side effects.
+pub use obex_primitives::OBEX_SHA3_256_ANCHOR as _obex_sha3_anchor_iii;
 
 pub type Sig = Sig64;
 
@@ -59,7 +61,7 @@ pub fn encode_access(a: &AccessList) -> Vec<u8> {
     let r = sort_dedup(a.read_accounts.clone());
     let w = sort_dedup(a.write_accounts.clone());
     let mut out = Vec::new();
-    out.extend_from_slice(&consensus::h_tag("tx.access", &[]));
+    out.extend_from_slice(&consensus::h_tag("obex.tx.access", &[]));
     out.extend_from_slice(&le_bytes::<4>(r.len() as u128));
     for pk in &r {
         out.extend_from_slice(pk);
@@ -87,7 +89,7 @@ pub struct TxBodyV1 {
 #[must_use]
 pub fn canonical_tx_bytes(tx: &TxBodyV1) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&consensus::h_tag("tx.body.v1", &[]));
+    out.extend_from_slice(&consensus::h_tag("obex.tx.body.v1", &[]));
     out.extend_from_slice(&tx.sender);
     out.extend_from_slice(&tx.recipient);
     out.extend_from_slice(&le_bytes::<8>(u128::from(tx.nonce)));
@@ -103,12 +105,12 @@ pub fn canonical_tx_bytes(tx: &TxBodyV1) -> Vec<u8> {
 
 #[must_use]
 pub fn txid(tx: &TxBodyV1) -> Hash256 {
-    consensus::h_tag("tx.id", &[&canonical_tx_bytes(tx)])
+    consensus::h_tag("obex.tx.id", &[&canonical_tx_bytes(tx)])
 }
 
 #[must_use]
 pub fn tx_commit(tx: &TxBodyV1) -> Hash256 {
-    consensus::h_tag("tx.commit", &[&canonical_tx_bytes(tx)])
+    consensus::h_tag("obex.tx.commit", &[&canonical_tx_bytes(tx)])
 }
 
 #[must_use]
@@ -135,7 +137,7 @@ pub struct TicketRecord {
 #[must_use]
 pub fn enc_ticket_leaf(t: &TicketRecord) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&consensus::h_tag("ticket.leaf", &[]));
+    out.extend_from_slice(&consensus::h_tag("obex.ticket.leaf", &[]));
     out.extend_from_slice(&t.ticket_id);
     out.extend_from_slice(&t.txid);
     out.extend_from_slice(&t.sender);
@@ -197,7 +199,7 @@ pub fn admit_single(
     y_prev: &Hash256,
     st: &mut AlphaIIIState,
 ) -> AdmitResult {
-    let msg = consensus::h_tag("tx.sig", &[&canonical_tx_bytes(tx)]);
+    let msg = consensus::h_tag("obex.tx.sig", &[&canonical_tx_bytes(tx)]);
     if !verify_sig(&tx.sender, &msg, sig) {
         return AdmitResult::Rejected(AdmitErr::BadSig);
     }

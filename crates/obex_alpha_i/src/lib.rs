@@ -25,6 +25,8 @@ use obex_primitives::{
     Sig64,
 };
 use thiserror::Error;
+// Anchor to ensure SHA3-256 presence without underscore-binding side effects.
+pub use obex_primitives::OBEX_SHA3_256_ANCHOR as _obex_sha3_anchor_i;
 
 /// Consensus constants (network versioned)
 pub const OBEX_ALPHA_I_VERSION: u32 = 1;

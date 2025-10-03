@@ -1,12 +1,14 @@
-use blake3;
+use sha3::{Digest, Sha3_256};
 use crate::{types::{MerklePath, MerkleRoot, N_LEAVES}, errors::Step1Error};
 
 #[inline]
 fn parent_hash(left: &[u8;32], right: &[u8;32]) -> [u8;32] {
-    let mut h = blake3::Hasher::new();
-    h.update(left); h.update(right);
+    let mut h = Sha3_256::new();
+    h.update(left);
+    h.update(right);
+    let digest = h.finalize();
     let mut out = [0u8;32];
-    out.copy_from_slice(h.finalize().as_bytes());
+    out.copy_from_slice(&digest);
     out
 }
 

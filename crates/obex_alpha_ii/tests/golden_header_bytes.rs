@@ -218,8 +218,8 @@ fn golden_header_comprehensive_flipbit_failures() {
             .unwrap_err();
             assert_eq!(
                 err,
-                ValidateErr::BeaconInvalid,
-                "Seed commit bit flip at byte {byte_idx} bit {bit_idx} should cause BeaconInvalid",
+                ValidateErr::BadSeedCommit,
+                "Seed commit bit flip at byte {byte_idx} bit {bit_idx} should cause BadSeedCommit",
             );
         }
     }

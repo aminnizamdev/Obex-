@@ -62,4 +62,28 @@ fn header_validate_err_parent_link() {
         ),
         Err(ValidateErr::BadParentLink)
     ));
+
+    // Seed commit mismatch should surface as BadSeedCommit
+    let mut h2 = build_header(
+        &parent,
+        ([9; 32], [5; 32], [6; 32], vec![], vec![]),
+        &providers,
+        &providers,
+        &providers,
+        OBEX_ALPHA_II_VERSION,
+    );
+    // Keep parent linkage correct
+    h2.parent_id = obex_header_id(&parent);
+    assert!(matches!(
+        validate_header(
+            &h2,
+            &parent,
+            &beacon,
+            &providers,
+            &providers,
+            &providers,
+            OBEX_ALPHA_II_VERSION
+        ),
+        Err(ValidateErr::BadSeedCommit)
+    ));
 }

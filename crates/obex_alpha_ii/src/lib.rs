@@ -21,6 +21,8 @@
 
 use obex_primitives::{consensus, ct_eq_hash, le_bytes, Hash256};
 use thiserror::Error;
+// Anchor to ensure SHA3-256 presence without underscore-binding side effects.
+pub use obex_primitives::OBEX_SHA3_256_ANCHOR as _obex_sha3_anchor_ii;
 
 /// Network version (consensus-sealed)
 pub const OBEX_ALPHA_II_VERSION: u32 = 2;
@@ -249,6 +251,7 @@ pub fn build_header(
 pub enum ValidateErr {
     BadParentLink,
     BadSlot,
+    BadSeedCommit,
     BeaconInvalid,
     TicketRootMismatch,
     PartRootMismatch,
@@ -289,6 +292,16 @@ pub fn validate_header(
     }
 
     // 3) Beacon verification
+    // 3) Seed commit equality: seed_commit == H("obex.slot.seed", [parent_id, LE(slot,8)])
+    let seed_commit_local = consensus::h_tag(
+        "obex.slot.seed",
+        &[&h.parent_id, &le_bytes::<8>(u128::from(h.slot))],
+    );
+    if !ct_eq_hash(&h.seed_commit, &seed_commit_local) {
+        return Err(ValidateErr::BadSeedCommit);
+    }
+
+    // 4) Beacon verification
     if !beacon.verify(&BeaconInputs {
         parent_id: &h.parent_id,
         slot: h.slot,
@@ -301,19 +314,19 @@ pub fn validate_header(
         return Err(ValidateErr::BeaconInvalid);
     }
 
-    // 4) Ticket root equality (slot s)
+    // 5) Ticket root equality (slot s)
     let ticket_root_local = ticket_roots.compute_ticket_root(h.slot);
     if !ct_eq_hash(&h.ticket_root, &ticket_root_local) {
         return Err(ValidateErr::TicketRootMismatch);
     }
 
-    // 5) Participation root equality (slot s)
+    // 6) Participation root equality (slot s)
     let part_root_local = part_roots.compute_part_root(h.slot);
     if !ct_eq_hash(&h.part_root, &part_root_local) {
         return Err(ValidateErr::PartRootMismatch);
     }
 
-    // 6) Transaction root equality (slot s-1)
+    // 7) Transaction root equality (slot s-1)
     let txroot_prev_local = tx_roots.compute_txroot(parent.slot);
     if !ct_eq_hash(&h.txroot_prev, &txroot_prev_local) {
         return Err(ValidateErr::TxRootPrevMismatch);
@@ -364,9 +377,16 @@ mod tests {
             txroot_prev: [0u8; 32],
         };
         let providers = ZeroRoot;
+        // Compute seed_commit per consensus: H("obex.slot.seed", [ parent_id, LE(slot,8) ])
+        let parent_id_expected = obex_header_id(&parent);
+        let s_next = parent.slot + 1;
+        let seed_commit = consensus::h_tag(
+            "obex.slot.seed",
+            &[&parent_id_expected, &le_bytes::<8>(u128::from(s_next))],
+        );
         let h = build_header(
             &parent,
-            ([4u8; 32], [5u8; 32], [6u8; 32], vec![], vec![]),
+            (seed_commit, [5u8; 32], [6u8; 32], vec![], vec![]),
             &providers,
             &providers,
             &providers,

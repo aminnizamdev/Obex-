@@ -1,5 +1,5 @@
 use crate::types::N_LEAVES;
-use blake3;
+use sha3::{Digest, Sha3_256};
 
 /// Streaming builder yields leaves without holding 2 GB in RAM.
 pub struct DatasetBuilder<'a> {
@@ -23,12 +23,15 @@ impl Iterator for DatasetBuilder<'_> {
     }
 }
 
-/// Leaf[i] = BLAKE3(key=K, input=LE64(i))
+/// Leaf[i] = SHA3_256( K || LE64(i) )
 #[must_use]
 pub fn compute_leaf(k: &[u8;32], index: u32) -> [u8; 32] {
     let msg = index.to_le_bytes();
-    let keyed = blake3::keyed_hash(k, &msg);
-    let mut out = [0u8;32];
-    out.copy_from_slice(keyed.as_bytes());
+    let mut hasher = Sha3_256::new();
+    hasher.update(k);
+    hasher.update(&msg);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
     out
 }

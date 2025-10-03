@@ -11,8 +11,8 @@ categories = ["cryptography","algorithms","data-structures"]
 
 [dependencies]
 obex_primitives = { path = "../obex_primitives" }
-ed25519-dalek = { version = "2", default-features = true }
-thiserror = "2.0"
+ed25519-dalek = { version = "2.2.0", default-features = true }
+thiserror = "2.0.16"
 
 
 [dev-dependencies]

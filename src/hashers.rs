@@ -1,8 +1,8 @@
-use blake3;
+use sha3::{Digest, Sha3_256};
 use ed25519_dalek as ed25519;
 use crate::{types::{ChainId, DOMAIN_TAG, EpochHash, EpochNonce, MerkleRoot, VrfOutput, VrfProof}, ser::le64, domain::{TAG_CHAL, TAG_EPOCH, TAG_KDF, TAG_SEED, TAG_VRFOUT}};
 
-/// E = `BLAKE3(DOMAIN_TAG` || "VRFOUT" || `CHAIN_ID` || `LE64(epoch_number)` || `epoch_nonce` || y || π)
+/// E = SHA3_256( DOMAIN_TAG || "VRFOUT" || CHAIN_ID || LE64(epoch_number) || epoch_nonce || y || π )
 #[must_use]
 pub fn compute_epoch_hash(
     chain_id: &ChainId,
@@ -11,7 +11,7 @@ pub fn compute_epoch_hash(
     y: &VrfOutput,
     pi: &VrfProof,
 ) -> EpochHash {
-    let mut h = blake3::Hasher::new();
+    let mut h = Sha3_256::new();
     h.update(DOMAIN_TAG);
     h.update(TAG_VRFOUT);
     h.update(&chain_id.0);
@@ -19,8 +19,9 @@ pub fn compute_epoch_hash(
     h.update(&epoch_nonce.0);
     h.update(&y.0);
     h.update(&pi.0);
+    let digest = h.finalize();
     let mut out = [0u8; 32];
-    out.copy_from_slice(h.finalize().as_bytes());
+    out.copy_from_slice(&digest);
     EpochHash(out)
 }
 
@@ -38,26 +39,31 @@ pub fn build_m(epoch_hash: &EpochHash, epoch_nonce: &EpochNonce, pk: &ed25519::V
 
 // Note: A `build_M` alias is intentionally omitted to satisfy pedantic naming lints.
 
-/// SEED = `BLAKE3(DOMAIN_TAG` || "SEED" || M || σ)
-/// K    = `BLAKE3(DOMAIN_TAG` || "KDF"  || SEED)
+/// SEED = SHA3_256( DOMAIN_TAG || "SEED" || M || σ )
+/// K    = SHA3_256( DOMAIN_TAG || "KDF"  || SEED )
 #[must_use]
 pub fn derive_seed_and_key(m: &[u8], sigma: &ed25519::Signature) -> ([u8; 32], [u8; 32]) {
-    let mut h = blake3::Hasher::new();
-    h.update(DOMAIN_TAG); h.update(TAG_SEED); h.update(m); h.update(&sigma.to_bytes());
-    let seed = h.finalize();
+    let mut h = Sha3_256::new();
+    h.update(DOMAIN_TAG);
+    h.update(TAG_SEED);
+    h.update(m);
+    h.update(&sigma.to_bytes());
+    let seed_digest = h.finalize();
 
-    let mut h2 = blake3::Hasher::new();
-    h2.update(DOMAIN_TAG); h2.update(TAG_KDF); h2.update(seed.as_bytes());
-    let k = h2.finalize();
+    let mut h2 = Sha3_256::new();
+    h2.update(DOMAIN_TAG);
+    h2.update(TAG_KDF);
+    h2.update(&seed_digest);
+    let k_digest = h2.finalize();
 
-    let mut seed_out = [0u8;32];
-    let mut k_out = [0u8;32];
-    seed_out.copy_from_slice(seed.as_bytes());
-    k_out.copy_from_slice(k.as_bytes());
+    let mut seed_out = [0u8; 32];
+    let mut k_out = [0u8; 32];
+    seed_out.copy_from_slice(&seed_digest);
+    k_out.copy_from_slice(&k_digest);
     (seed_out, k_out)
 }
 
-/// C = `BLAKE3(DOMAIN_TAG` || "CHAL" || E || `epoch_nonce` || pk || root)
+/// C = SHA3_256( DOMAIN_TAG || "CHAL" || E || epoch_nonce || pk || root )
 #[must_use]
 pub fn build_challenge_seed(
     epoch_hash: &EpochHash,
@@ -65,13 +71,15 @@ pub fn build_challenge_seed(
     pk: &ed25519::VerifyingKey,
     root: &MerkleRoot,
 ) -> [u8; 32] {
-    let mut h = blake3::Hasher::new();
-    h.update(DOMAIN_TAG); h.update(TAG_CHAL);
+    let mut h = Sha3_256::new();
+    h.update(DOMAIN_TAG);
+    h.update(TAG_CHAL);
     h.update(&epoch_hash.0);
     h.update(&epoch_nonce.0);
     h.update(pk.as_bytes());
     h.update(&root.0);
-    let mut out = [0u8;32];
-    out.copy_from_slice(h.finalize().as_bytes());
+    let digest = h.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
     out
 }
