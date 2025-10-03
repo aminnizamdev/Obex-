@@ -23,7 +23,6 @@ OBEX Alpha is a production-ready blockchain implementation featuring RFC 9381 EC
 - **Modular Design**: Five specialized engines (α-I, α-II, α-III, α-T) plus E2E integration layer
 - **Type Safety**: Comprehensive Rust type system with zero unsafe code and strict error handling
 - **Comprehensive Testing**: 47+ tests including golden byte verification, VRF compliance, and E2E pipeline tests
-- **CI/CD Pipeline**: Automated testing with clippy, rustfmt, feature matrix, and forbidden tag validation
 - **Production Ready**: Frozen consensus rules, deterministic behavior, and comprehensive fuzzing infrastructure
 
 ## Table of Contents
@@ -379,15 +378,10 @@ We welcome contributions to OBEX Alpha! Please follow these guidelines:
 git clone https://github.com/yourusername/Obex-.git
 cd Obex-
 
-# Create a feature branch
-git checkout -b feature/your-feature-name
-
 # Make your changes and test
 cargo test --workspace --all-features
 cargo fmt --all
 cargo clippy --all-targets --all-features
-
-# Submit a pull request
 ```
 
 ### Code Standards
@@ -398,14 +392,7 @@ cargo clippy --all-targets --all-features
 - **Performance**: Benchmark performance-critical changes
 - **Consensus Safety**: Changes to consensus rules require careful review
 
-### Pull Request Process
-
-1. **Fork** the repository and create a feature branch
-2. **Implement** your changes with comprehensive tests
-3. **Validate** all tests pass: `cargo test --workspace --all-features`
-4. **Format** code: `cargo fmt --all`
-5. **Lint** code: `cargo clippy --all-targets --all-features`
-6. **Submit** pull request with detailed description
+<!-- Pull request workflow omitted for solo development setup -->
 
 ## Security
 
